@@ -52,6 +52,17 @@ export function elementFingerprint(
 }
 
 /**
+ * Like {@link elementFingerprint} but text/value-free, so state hashing isn't
+ * churned by live counters, clocks, or rotating copy. Position (path) + role
+ * still distinguish distinct controls.
+ */
+export function structuralFingerprint(
+  d: Pick<ElementDescriptor, 'tag' | 'type' | 'role' | 'path'>,
+): string {
+  return fnv1a([d.tag, d.type ?? '', d.role ?? '', d.path].join('|'));
+}
+
+/**
  * A fingerprint for the current UI state: normalized URL plus an
  * order-independent multiset of the interactive elements present.
  */

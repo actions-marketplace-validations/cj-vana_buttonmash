@@ -30,7 +30,7 @@ import {
 import { aggregateFindings } from '../detectors/aggregate';
 import { runPageChecks, type DetectorState } from '../detectors/page-checks';
 import { SignalRecorder } from '../detectors/recorder';
-import { attachSignalListeners, type CustomConsoleRule } from '../detectors/signals';
+import { attachSignalListeners, DEFAULT_CONSOLE_IGNORE, type CustomConsoleRule } from '../detectors/signals';
 import { DANGEROUS_PATH_RE } from '../guardrails/destructive';
 import { installFence, isAllowedOrigin } from '../guardrails/fence';
 import { launchBrowser, createDeterministicContext } from '../session/browser';
@@ -95,13 +95,20 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
     }
   };
 
-  const ignore = compileRegexes(cfg.detectors.ignorePatterns);
-  const customConsole: CustomConsoleRule[] = cfg.detectors.custom
-    .filter((c) => c.target === 'console')
-    .flatMap((c) => {
-      const re = compileRegexes([c.pattern])[0];
-      return re ? [{ name: c.name, re, severity: c.severity }] : [];
-    });
+  const ignore = compileRegexes([
+    ...cfg.detectors.ignorePatterns,
+    ...(cfg.detectors.useDefaultIgnore ? DEFAULT_CONSOLE_IGNORE : []),
+  ]);
+  const compileCustom = (target: 'console' | 'dom' | 'url'): CustomConsoleRule[] =>
+    cfg.detectors.custom
+      .filter((c) => c.target === target)
+      .flatMap((c) => {
+        const re = compileRegexes([c.pattern])[0];
+        return re ? [{ name: c.name, re, severity: c.severity }] : [];
+      });
+  const customConsole = compileCustom('console');
+  const customDom = compileCustom('dom');
+  const customUrl = compileCustom('url');
   // Hard-block dangerous paths (logout, delete, cancel) at the route level too,
   // not just by control label — unless the user opts into destructive testing.
   const pathRegexes = compileRegexes(cfg.guardrails.blockedPathPatterns);
@@ -225,7 +232,21 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
   let recordsCreated = 0;
   let stopReason = 'budget exhausted';
 
+  // Graceful shutdown: on SIGINT/SIGTERM (CI cancel/timeout) flip a flag and let
+  // the loop break cleanly so the report still flushes with partial findings.
+  let aborted = false;
+  const onSignal = (): void => {
+    aborted = true;
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+
+  try {
   for (let i = 0; i < cfg.budget.maxActions; i++) {
+    if (aborted) {
+      stopReason = 'aborted (received SIGINT/SIGTERM)';
+      break;
+    }
     if (Date.now() - start > cfg.budget.maxDurationMs) {
       stopReason = 'time budget reached';
       break;
@@ -282,7 +303,7 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
     const elements = await discoverElements(page);
     const stateHash = stateFingerprint(
       url,
-      elements.map((e) => e.fp),
+      elements.map((e) => (cfg.explore.stateGranularity === 'structural' ? e.structuralFp : e.fp)),
     );
     const newState = explorer.isNewState(stateHash);
     explorer.markState(stateHash);
@@ -370,7 +391,19 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
     // Oracles run AFTER the action, on the resulting state — this keeps the
     // expensive content/axe scans out of the discover→act window.
     if (!page.isClosed()) {
-      await runPageChecks({ page, recorder, cfg, state, markBillingLive }, newState);
+      await runPageChecks(
+        {
+          page,
+          recorder,
+          cfg,
+          state,
+          markBillingLive,
+          customDom,
+          customUrl,
+          timeLeftMs: cfg.budget.maxDurationMs - (Date.now() - start),
+        },
+        newState,
+      );
     }
 
     // Screenshot the step if it surfaced new signals.
@@ -378,6 +411,14 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
       const shot = await captureScreenshot(page, outDir, i);
       if (shot) screenshots.set(i, shot);
     }
+  }
+  } catch (err) {
+    // An unexpected internal error must not lose the partial report.
+    stopReason = `internal error: ${(err as Error).message}`;
+    recorder.add('driver', `run loop error: ${(err as Error).message}`, { severity: 'medium' });
+  } finally {
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
   }
 
   logger.step(`Stopping: ${stopReason}.`);

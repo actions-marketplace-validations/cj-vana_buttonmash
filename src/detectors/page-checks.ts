@@ -20,16 +20,28 @@ export interface DetectorState {
   seenBrokenImages: Set<string>;
 }
 
+export interface CustomTextRule {
+  name: string;
+  re: RegExp;
+  severity: Severity;
+}
+
 export interface PageCheckDeps {
   page: Page;
   recorder: SignalRecorder;
   cfg: ResolvedConfig;
   state: DetectorState;
   markBillingLive: (reasons: string[]) => void;
+  /** Custom rules whose pattern is matched against page text (on new states). */
+  customDom: CustomTextRule[];
+  /** Custom rules whose pattern is matched against the current URL (each step). */
+  customUrl: CustomTextRule[];
+  /** Remaining wall-clock budget (ms); the slow a11y scan is skipped when low. */
+  timeLeftMs: number;
 }
 
-/** Runs in the browser. Cheap structural snapshot for blank/broken-image checks. */
-function domCheck(): { blank: boolean; brokenImages: string[] } {
+/** Runs in the browser. Cheap structural snapshot for blank/broken-image/overlay. */
+function domCheck(): { blank: boolean; brokenImages: string[]; overlay: string | null } {
   const body = document.body;
   const text = (body?.innerText || '').trim();
   const interactive = document.querySelectorAll(
@@ -43,7 +55,29 @@ function domCheck(): { blank: boolean; brokenImages: string[] } {
   }
   const scrollH = document.documentElement?.scrollHeight ?? 0;
   const blank = !!body && text.length < 3 && imgs.length === 0 && interactive === 0 && scrollH < 60;
-  return { blank, brokenImages: Array.from(new Set(broken)).slice(0, 20) };
+
+  // Framework error overlays — error boundaries often don't re-throw to window,
+  // so neither pageerror nor blank-screen fires. Match TIGHT signatures only.
+  const OVERLAY_SELECTORS = [
+    'nextjs-portal',
+    'vite-error-overlay',
+    '#vite-error-overlay',
+    '[data-nextjs-dialog]',
+    '#nextjs__container_errors_label',
+    '#webpack-dev-server-client-overlay',
+    'react-error-overlay',
+  ];
+  let overlay: string | null = null;
+  for (const s of OVERLAY_SELECTORS) {
+    if (document.querySelector(s)) {
+      overlay = s;
+      break;
+    }
+  }
+  if (!overlay && /Application error: a client-side exception|Unexpected Application Error/i.test(text)) {
+    overlay = 'framework error message';
+  }
+  return { blank, brokenImages: Array.from(new Set(broken)).slice(0, 20), overlay };
 }
 
 /**
@@ -102,7 +136,7 @@ export async function runPageChecks(deps: PageCheckDeps, newState: boolean): Pro
   const { page, recorder, cfg, state } = deps;
 
   // 1. Cheap structural checks (every step).
-  let dom: { blank: boolean; brokenImages: string[] };
+  let dom: { blank: boolean; brokenImages: string[]; overlay: string | null };
   try {
     dom = await withDeadline(page.evaluate(domCheck), 8_000, 'page-checks/dom');
   } catch {
@@ -119,6 +153,19 @@ export async function runPageChecks(deps: PageCheckDeps, newState: boolean): Pro
         state.seenBrokenImages.add(src);
         recorder.add('broken-image', src, { severity: 'low' });
       }
+    }
+  }
+  if (cfg.detectors.errorOverlay && dom.overlay) {
+    recorder.add('error-overlay', `framework error overlay detected (${dom.overlay})`, {
+      severity: 'high',
+    });
+  }
+
+  // Custom url rules (cheap, every step).
+  if (deps.customUrl.length) {
+    const u = page.url();
+    for (const rule of deps.customUrl) {
+      if (rule.re.test(u)) recorder.add('custom', `${rule.name}: ${u}`, { severity: rule.severity });
     }
   }
 
@@ -165,6 +212,13 @@ export async function runPageChecks(deps: PageCheckDeps, newState: boolean): Pro
     }
   }
 
+  // Custom dom rules — matched against the page markup on new states.
+  if (deps.customDom.length && html) {
+    for (const rule of deps.customDom) {
+      if (rule.re.test(html)) recorder.add('custom', rule.name, { severity: rule.severity });
+    }
+  }
+
   if (cfg.detectors.reflectedInput && state.pendingCanaries.size && html) {
     const lowerHtml = html.toLowerCase();
     for (const canary of [...state.pendingCanaries]) {
@@ -194,6 +248,7 @@ export async function runPageChecks(deps: PageCheckDeps, newState: boolean): Pro
     }
   }
 
-  // 3. Accessibility (opt-in, slower).
-  if (cfg.detectors.a11y) await runAxe(deps);
+  // 3. Accessibility (opt-in, slower) — skipped when little budget remains so a
+  //    long axe scan can't overshoot --max-duration and trip the CI timeout.
+  if (cfg.detectors.a11y && deps.timeLeftMs > 40_000) await runAxe(deps);
 }

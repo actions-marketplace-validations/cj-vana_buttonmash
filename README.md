@@ -196,6 +196,7 @@ export default defineConfig({
 - **Uncaught JS errors** and `console.error`
 - **HTTP 4xx/5xx** responses and failed requests
 - **Renderer crashes** and **hangs / unresponsive pages** (wall-clock watchdog)
+- **Framework error overlays** (Next.js/Vite/React, "Application error") — caught even when an error boundary swallows the throw
 - **Blank screens** ("white screen of death") and **broken images**
 - **Reflected input** — a safe canary probe that flags possible XSS sinks (never injects executing payloads)
 - **Client-exposed secrets** (Stripe/AWS/GitHub/Slack/… keys, gitleaks-derived)
@@ -203,7 +204,14 @@ export default defineConfig({
 - **Custom signals** — your own console/DOM/url regex rules
 
 Findings are **deduplicated** (the same bug firing 500× becomes one finding with
-`count: 500`) and carry a minimal repro trace.
+`count: 500`) and carry a minimal repro trace. To stay usable on real apps,
+buttonmash ships a **default allowlist** of benign console noise (ResizeObserver
+loops, React dev warnings, HMR…) and **downgrades third-party `console.error`**
+(analytics/chat/payment SDKs) so they don't redden your build — first-party
+errors stay high (`detectors.thirdPartyConsole: true` to opt in). State dedup is
+**structural** by default, so live counters/clocks don't explode the state space
+on dynamic apps. And if CI cancels or times out mid-run, a **partial report is
+still written** (SIGTERM-safe) so you never lose the findings collected so far.
 
 ## 🛡 Safety
 

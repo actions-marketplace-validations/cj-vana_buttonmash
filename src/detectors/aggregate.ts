@@ -30,6 +30,7 @@ const KIND_META: Record<SignalKind, KindMeta> = {
   hang: { category: 'hang', defaultSeverity: 'high', label: 'Unresponsive / hang' },
   'blank-screen': { category: 'blank-screen', defaultSeverity: 'high', label: 'Blank screen' },
   'broken-image': { category: 'broken-image', defaultSeverity: 'low', label: 'Broken image' },
+  'error-overlay': { category: 'error-overlay', defaultSeverity: 'high', label: 'Framework error overlay' },
   a11y: { category: 'a11y', defaultSeverity: 'medium', label: 'Accessibility violation' },
   'reflected-input': {
     category: 'reflected-input',

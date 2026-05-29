@@ -8,7 +8,7 @@
 import type { Page } from 'playwright';
 
 import { withDeadline } from '../core/async';
-import { elementFingerprint } from '../core/hash';
+import { elementFingerprint, structuralFingerprint } from '../core/hash';
 import type { ElementDescriptor } from '../core/types';
 
 export const INTERACTIVE_SELECTOR = [
@@ -36,7 +36,7 @@ export const INTERACTIVE_SELECTOR = [
   'label[for]',
 ].join(',');
 
-type RawDescriptor = Omit<ElementDescriptor, 'fp'>;
+type RawDescriptor = Omit<ElementDescriptor, 'fp' | 'structuralFp'>;
 
 /** Runs in the browser; returns serializable descriptors for visible controls. */
 function collect(selector: string): RawDescriptor[] {
@@ -255,5 +255,5 @@ export async function discoverElements(page: Page): Promise<ElementDescriptor[]>
   }
   return raws
     .filter((r) => !r.disabled)
-    .map((r) => ({ ...r, fp: elementFingerprint(r) }));
+    .map((r) => ({ ...r, fp: elementFingerprint(r), structuralFp: structuralFingerprint(r) }));
 }

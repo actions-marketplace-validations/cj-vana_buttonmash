@@ -18,6 +18,30 @@ export interface CustomConsoleRule {
   severity: Severity;
 }
 
+/** Well-known benign console noise — applied unless useDefaultIgnore is false. */
+export const DEFAULT_CONSOLE_IGNORE: string[] = [
+  'ResizeObserver loop',
+  '^Warning: ', // React dev warnings
+  'validateDOMNesting',
+  'Each child in a list should have a unique',
+  'Download the React DevTools',
+  'React DevTools',
+  '\\[HMR\\]',
+  '\\[vite\\]',
+  '\\[webpack',
+  'Lighthouse',
+  'favicon',
+  'the server responded with a status of', // paired with the HTTP oracle
+];
+
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
+  }
+}
+
 export interface SignalDeps {
   page: Page;
   recorder: SignalRecorder;
@@ -34,6 +58,7 @@ export function attachSignalListeners(deps: SignalDeps): void {
   const { page, recorder, cfg, ignore, customConsole, onBillingLive } = deps;
   const redact = cfg.guardrails.secrets.redact ? redactString : (s: string) => s;
   const ignored = (text: string) => anyMatch(text, ignore);
+  const allowed = new Set(cfg.guardrails.allowedOrigins);
 
   page.on('console', (msg) => {
     const type = msg.type();
@@ -41,7 +66,16 @@ export function attachSignalListeners(deps: SignalDeps): void {
     if (ignored(text)) return;
 
     if (type === 'error' && cfg.detectors.consoleErrors) {
-      recorder.add('console.error', redact(text), { severity: 'high' });
+      // First-party errors are high; third-party SDK noise (analytics/chat/
+      // payments) is downgraded unless the user opts in.
+      const src = originOf(msg.location()?.url ?? '');
+      const thirdParty = src !== '' && !allowed.has(src);
+      const severity: Severity =
+        thirdParty && !cfg.detectors.thirdPartyConsole ? 'low' : 'high';
+      recorder.add('console.error', redact(text), {
+        severity,
+        meta: thirdParty ? { source: src } : undefined,
+      });
     } else if (type === 'warning' && cfg.detectors.consoleWarnings) {
       recorder.add('console.warn', redact(text), { severity: 'low' });
     }
@@ -88,9 +122,13 @@ export function attachSignalListeners(deps: SignalDeps): void {
     const url = res.url();
     if (ignored(url)) return;
     const type = res.request().resourceType();
-    const isMain = type === 'document' || type === 'xhr' || type === 'fetch';
+    const isDoc = type === 'document';
+    const isApi = type === 'xhr' || type === 'fetch';
     const kind = status >= 500 ? 'http.5xx' : 'http.4xx';
-    const severity: Severity = status >= 500 ? (isMain ? 'high' : 'medium') : isMain ? 'medium' : 'low';
+    // A 4xx/5xx on a navigated DOCUMENT is a broken route → high. API calls are
+    // high for 5xx, medium for 4xx; asset failures stay low.
+    const severity: Severity =
+      status >= 500 ? (isDoc || isApi ? 'high' : 'medium') : isDoc ? 'high' : isApi ? 'medium' : 'low';
     recorder.add(kind, redact(`${status} ${url}`), {
       severity,
       meta: { status, resourceType: type },

@@ -33,6 +33,9 @@ export type ActionKind =
 export interface ElementDescriptor {
   /** Stable, run-independent fingerprint of this logical control. */
   fp: string;
+  /** Like `fp` but excludes visible text/value — used for state hashing so
+   *  live counters/timestamps don't mint a new state every step. */
+  structuralFp: string;
   tag: string;
   type: string | null;
   role: string | null;
@@ -157,6 +160,7 @@ export type SignalKind =
   | 'hang'
   | 'blank-screen'
   | 'broken-image'
+  | 'error-overlay'
   | 'a11y'
   | 'reflected-input'
   | 'secret-leak'

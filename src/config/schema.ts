@@ -72,6 +72,11 @@ const ExploreSchema = z
     weights: ActionWeightsSchema,
     /** Fuzz text inputs with the safe corpus. */
     fuzzInputs: z.boolean().default(true),
+    /** How states are de-duplicated. 'structural' (default) ignores visible
+     *  text/value so live counters/clocks don't mint a new state every step
+     *  (which would defeat saturation and re-run oracles endlessly). 'text'
+     *  restores the old text-sensitive behavior. */
+    stateGranularity: z.enum(['structural', 'text']).default('structural'),
     /** Auto-crawl: discover same-origin links as it explores and visit every
      *  reachable page. With this on, pointing at the site root sweeps the whole
      *  site — `routes` become optional hints for pages nothing links to. */
@@ -179,7 +184,17 @@ const DetectorsSchema = z
     a11y: z.boolean().default(false),
     /** Reflected-input probe (safe canary, no executing payloads). */
     reflectedInput: z.boolean().default(true),
+    /** Detect framework error overlays (Next/Vite/React, generic "something
+     *  went wrong" full-screen) — error boundaries often don't re-throw. */
+    errorOverlay: z.boolean().default(true),
     custom: z.array(CustomDetectorSchema).default([]),
+    /** Apply buttonmash's built-in allowlist of well-known benign console
+     *  noise (ResizeObserver loop, React dev warnings, HMR, etc.). */
+    useDefaultIgnore: z.boolean().default(true),
+    /** Treat console.error from THIRD-PARTY scripts (analytics/chat/payment
+     *  SDKs) as high severity. Off by default → such errors are downgraded to
+     *  low so they don't redden the build. First-party errors stay high. */
+    thirdPartyConsole: z.boolean().default(false),
     /** Regex allowlist of benign console/network noise to ignore. */
     ignorePatterns: z.array(z.string()).default([]),
   })

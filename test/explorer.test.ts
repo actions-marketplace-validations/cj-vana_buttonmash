@@ -6,6 +6,7 @@ import type { ElementDescriptor } from '../src/core/types';
 function els(...fps: string[]): ElementDescriptor[] {
   return fps.map((fp) => ({
     fp,
+    structuralFp: fp,
     tag: 'button',
     type: null,
     role: null,

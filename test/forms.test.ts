@@ -6,6 +6,7 @@ let n = 0;
 function el(over: Partial<ElementDescriptor>): ElementDescriptor {
   return {
     fp: `fp${n++}`,
+    structuralFp: `sfp${n}`,
     tag: 'input',
     type: 'text',
     role: null,

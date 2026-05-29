@@ -5,6 +5,7 @@ import type { ElementDescriptor } from '../src/core/types';
 function el(partial: Partial<ElementDescriptor>): ElementDescriptor {
   return {
     fp: 'x',
+    structuralFp: 'x',
     tag: 'button',
     type: null,
     role: null,
