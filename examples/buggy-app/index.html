@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>buttonmash demo — a deliberately buggy app</title>
+    <style>
+      body { font: 15px system-ui, sans-serif; margin: 2rem; max-width: 720px; }
+      button, a.btn { display: inline-block; margin: 4px; padding: 8px 12px; }
+      .danger { background: #c0392b; color: white; }
+      fieldset { margin: 1rem 0; }
+    </style>
+  </head>
+  <body>
+    <h1>buttonmash demo app 🐒</h1>
+    <p>
+      This page intentionally contains bugs so buttonmash has something to find.
+      It is configured in Stripe <strong>test mode</strong> (publishable key
+      <code>pk_test_51Hxxxxxxxxxxxxxxxxxxxxxx</code>) — never a live key.
+    </p>
+
+    <fieldset>
+      <legend>Things that break</legend>
+      <button id="throw-btn" onclick="boom()">Crash on click</button>
+      <button id="logerr-btn" onclick="console.error('clicked error button')">Log an error</button>
+      <button id="fetch500-btn" onclick="fetch('/api/boom')">Call a 500 endpoint</button>
+      <a class="btn" href="https://example.com/external">External link (should be fenced)</a>
+    </fieldset>
+
+    <fieldset>
+      <legend>Dangerous controls (buttonmash must NOT trigger these)</legend>
+      <button class="danger" onclick="console.error('DELETED-EVERYTHING')">Delete account</button>
+      <button class="danger" onclick="console.error('PAID-REAL-MONEY')">Pay now</button>
+      <a class="btn danger" href="/logout">Log out</a>
+    </fieldset>
+
+    <fieldset>
+      <legend>A form</legend>
+      <form onsubmit="event.preventDefault()">
+        <input id="name" type="text" placeholder="Your name" />
+        <input id="email" type="email" placeholder="Email" />
+        <select id="plan">
+          <option>Free</option>
+          <option>Pro</option>
+        </select>
+        <label><input type="checkbox" id="agree" /> I agree</label>
+        <button type="submit">Submit</button>
+      </form>
+    </fieldset>
+
+    <!-- A broken image: the server returns 404 for this path. -->
+    <img src="/missing-asset.png" alt="a broken image" width="120" height="80" />
+
+    <script>
+      function boom() {
+        throw new Error('intentional uncaught error from Crash button');
+      }
+      // Fire one uncaught error and one bad request shortly after load so the
+      // demo reliably surfaces findings even on a short run.
+      setTimeout(() => {
+        // eslint-disable-next-line no-undef
+        nonExistentFunction();
+      }, 50);
+      setTimeout(() => {
+        fetch('/api/boom').catch(() => {});
+      }, 80);
+      console.error('startup diagnostic: intentional console error');
+    </script>
+  </body>
+</html>

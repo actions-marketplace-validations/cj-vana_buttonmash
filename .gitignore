@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+
+# buttonmash run output (reports + artifacts)
+buttonmash-report/
+artifacts/
+
+# Captured auth sessions — NEVER commit (contains cookies + tokens)
+playwright/.auth/
+*.auth.json
+storage-state.json
+
+# Playwright
+test-results/
+playwright-report/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
