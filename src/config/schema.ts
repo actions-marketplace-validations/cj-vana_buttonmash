@@ -16,10 +16,34 @@ const ViewportSchema = z
   })
   .default({});
 
+const LoginScriptSchema = z.object({
+  /** Login page (relative to target or absolute, same-origin). */
+  url: z.string(),
+  usernameSelector: z.string(),
+  passwordSelector: z.string(),
+  /** Submit control; if omitted, Enter is pressed in the password field. */
+  submitSelector: z.string().optional(),
+  /** Credentials — support ${ENV_VAR} interpolation so secrets stay in env. */
+  username: z.string(),
+  password: z.string(),
+  /** Wait until the URL matches this regex after submit (login succeeded). */
+  successUrl: z.string().optional(),
+  /** …or until this selector is visible. */
+  successSelector: z.string().optional(),
+});
+
 const AuthSchema = z
   .object({
     /** Path to a Playwright storageState JSON (cookies + localStorage). */
     storageState: z.string().optional(),
+    /** A scriptable login: buttonmash logs in fresh each run (CI-friendly) and
+     *  re-authenticates if the session drops mid-run. */
+    loginScript: LoginScriptSchema.optional(),
+    /** Regex (string) for URLs that indicate a logged-out / login page. Used to
+     *  detect a session drop mid-run (only when auth is configured). */
+    loginUrlPattern: z
+      .string()
+      .default('(log[-_]?in|sign[-_]?in|/login\\b|/signin\\b|auth/login|/sso\\b)'),
   })
   .default({});
 

@@ -10,6 +10,7 @@ import { normalizeUrl } from '../core/hash';
 import type { FieldDescriptor, FormDescriptor } from '../core/types';
 import { classifyControl } from '../guardrails/destructive';
 import type { ActionContext } from './actions';
+import { locate } from './discover';
 import { valueForField } from './field-values';
 
 export interface FormResult {
@@ -34,7 +35,7 @@ export function formIsUnsafe(form: FormDescriptor, cfg: ResolvedConfig): string 
 async function fillField(ctx: ActionContext, field: FieldDescriptor, attempt: number): Promise<boolean> {
   const { page, cfg } = ctx;
   const t = cfg.budget.interactionTimeoutMs;
-  const loc = page.locator(field.selector).first();
+  const loc = locate(page, field.selector, field.frameUrl);
   const v = valueForField(ctx.runId, field, attempt);
   try {
     switch (field.kind) {
@@ -130,9 +131,7 @@ export async function fillAndSubmit(ctx: ActionContext, form: FormDescriptor): P
     const t = cfg.budget.interactionTimeoutMs;
     let clicked = false;
     if (form.submit) {
-      clicked = await page
-        .locator(form.submit.selector)
-        .first()
+      clicked = await locate(page, form.submit.selector, form.submit.frameUrl)
         .click({ timeout: t, noWaitAfter: true })
         .then(() => true)
         .catch(() => false);

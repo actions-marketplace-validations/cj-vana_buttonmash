@@ -40,6 +40,7 @@ const KIND_META: Record<SignalKind, KindMeta> = {
   'secret-leak': { category: 'secret-leak', defaultSeverity: 'high', label: 'Client-exposed secret' },
   'billing-live': { category: 'billing-live', defaultSeverity: 'critical', label: 'Live billing mode' },
   'form-validation': { category: 'form-validation', defaultSeverity: 'low', label: 'Form not accepted' },
+  'session-lost': { category: 'session-lost', defaultSeverity: 'high', label: 'Session lost (logged out mid-run)' },
   custom: { category: 'custom', defaultSeverity: 'medium', label: 'Custom rule' },
   driver: { category: 'driver-error', defaultSeverity: 'medium', label: 'Driver error' },
 };

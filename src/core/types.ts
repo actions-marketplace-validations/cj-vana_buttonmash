@@ -44,8 +44,13 @@ export interface ElementDescriptor {
   editable: boolean;
   /** Structural DOM path used as part of the fingerprint. */
   path: string;
-  /** A Playwright-friendly selector to (re-)locate the element this step. */
+  /** A Playwright-friendly selector to (re-)locate the element this step.
+   *  Light-DOM elements use an nth-child CSS path; shadow-DOM elements use an
+   *  ephemeral [data-bm-id] tag (Playwright's CSS engine pierces open shadow). */
   selector: string;
+  /** URL of the same-origin iframe this element lives in (undefined = main frame).
+   *  Relocation resolves the Frame and queries within it. */
+  frameUrl?: string;
   /** Anchor href, when present — used by the destructive-control classifier. */
   href?: string;
   /** Owning form's action target. */
@@ -108,6 +113,8 @@ export interface FieldDescriptor {
   options?: { value: string; label: string; disabled: boolean }[];
   radioGroupName?: string;
   formKey: string;
+  /** Owning same-origin iframe URL, if the field lives in one. */
+  frameUrl?: string;
 }
 
 /** A discovered create-surface: a cluster of fields + a submit control. */
@@ -166,6 +173,7 @@ export type SignalKind =
   | 'secret-leak'
   | 'billing-live'
   | 'form-validation'
+  | 'session-lost'
   | 'custom'
   | 'driver';
 

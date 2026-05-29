@@ -66,10 +66,30 @@
       <button class="danger" onclick="console.error('DELETED-EVERYTHING')">Delete all items</button>
     </fieldset>
 
+    <fieldset>
+      <legend>Shadow DOM + iframe (buttonmash should reach inside both)</legend>
+      <bm-widget></bm-widget>
+      <iframe src="/frame.html" title="embedded" width="320" height="90"></iframe>
+    </fieldset>
+
     <!-- A broken image: the server returns 404 for this path. -->
     <img src="/missing-asset.png" alt="a broken image" width="120" height="80" />
 
     <script>
+      // A web component whose controls live in an OPEN shadow root.
+      class BmWidget extends HTMLElement {
+        connectedCallback() {
+          const root = this.attachShadow({ mode: 'open' });
+          root.innerHTML = '<button id="shadow-btn">Shadow Action</button>';
+          root
+            .querySelector('button')
+            .addEventListener('click', () => {
+              location.hash = '#shadow-clicked';
+            });
+        }
+      }
+      customElements.define('bm-widget', BmWidget);
+
       let itemSeq = 0;
       function createItem() {
         const name = document.getElementById('item-name').value;

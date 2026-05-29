@@ -34,7 +34,7 @@ import { attachSignalListeners, DEFAULT_CONSOLE_IGNORE, type CustomConsoleRule }
 import { DANGEROUS_PATH_RE } from '../guardrails/destructive';
 import { installFence, isAllowedOrigin } from '../guardrails/fence';
 import { launchBrowser, createDeterministicContext } from '../session/browser';
-import { validateStorageState } from '../session/auth';
+import { performScriptedLogin, validateStorageState } from '../session/auth';
 import { executeAction, gatePlan, planAction, type ActionContext } from './actions';
 import { collectLinks, discoverElements, drainNavLog, INTERACTIVE_SELECTOR } from './discover';
 import { groupForms } from './forms';
@@ -210,6 +210,26 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
   if (cfg.explore.crawl) logger.info('Crawl:   auto-discovering links across the site');
   else if (cfg.routes.length) logger.info(`Routes:  sweeping ${1 + cfg.routes.length} routes`);
 
+  // Auth: detect logged-out/login pages and (re-)authenticate via a login script.
+  const authConfigured = !!(cfg.auth.storageState || cfg.auth.loginScript);
+  const loginRe = new RegExp(cfg.auth.loginUrlPattern, 'i');
+  const isLoginPage = (u: string): boolean => {
+    try {
+      return loginRe.test(new URL(u).pathname);
+    } catch {
+      return false;
+    }
+  };
+  let wasAuthenticated = false;
+  const doLogin = async (): Promise<void> => {
+    if (!cfg.auth.loginScript) return;
+    const ls = { ...cfg.auth.loginScript, url: new URL(cfg.auth.loginScript.url, cfg.target).toString() };
+    logger.step('Logging in via login script…');
+    await performScriptedLogin(page, ls, navTimeout).catch(() => {});
+  };
+
+  if (cfg.auth.loginScript) await doLogin();
+
   // Initial navigation (a hard failure here is critical).
   try {
     await withDeadline(
@@ -280,6 +300,28 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
       sinceNew = 0;
       url = page.url();
     }
+    // Session handling: if auth is configured and we land on a login page, log
+    // in (or, if we had been authenticated, treat it as a session drop). Gated
+    // on authConfigured so genuinely public apps never false-positive.
+    if (authConfigured && isLoginPage(url)) {
+      if (wasAuthenticated) {
+        recorder.add('session-lost', `redirected to a login page (${url}) — session likely expired`, {
+          severity: 'high',
+        });
+      }
+      if (cfg.auth.loginScript) {
+        await doLogin();
+        await gotoUrl(cfg.target);
+        depth = 0;
+        sinceNew = 0;
+        url = page.url();
+      } else if (wasAuthenticated) {
+        stopReason = 'session expired — set auth.loginScript to re-authenticate';
+        break;
+      }
+    }
+    if (authConfigured && !isLoginPage(url)) wasAuthenticated = true;
+
     const nUrl = normalizeUrl(url);
     recorder.setContext(i, url);
     pagesVisited.add(nUrl);

@@ -5,7 +5,7 @@
  * contenteditable controls, filter to actionable ones, and build a stable
  * fingerprint and a locator for each.
  */
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 
 import { withDeadline } from '../core/async';
 import { elementFingerprint, structuralFingerprint } from '../core/hash';
@@ -38,8 +38,12 @@ export const INTERACTIVE_SELECTOR = [
 
 type RawDescriptor = Omit<ElementDescriptor, 'fp' | 'structuralFp'>;
 
-/** Runs in the browser; returns serializable descriptors for visible controls. */
-function collect(selector: string): RawDescriptor[] {
+/** Runs in the browser (per document/frame); returns serializable descriptors
+ *  for visible controls, piercing OPEN shadow roots. Shadow-DOM elements are
+ *  tagged with an ephemeral [data-bm-id] so Playwright (whose CSS engine pierces
+ *  open shadow roots) can relocate them; light-DOM elements keep an nth-child path. */
+function collect(arg: { selector: string; framePrefix: string }): RawDescriptor[] {
+  const { selector, framePrefix } = arg;
   const isVisible = (e: Element): boolean => {
     const el = e as HTMLElement;
     const r = el.getBoundingClientRect();
@@ -137,8 +141,10 @@ function collect(selector: string): RawDescriptor[] {
 
   const out: RawDescriptor[] = [];
   const seen = new Set<Element>();
-  for (const e of Array.from(document.querySelectorAll(selector))) {
-    if (seen.has(e) || !isVisible(e)) continue;
+  let bm = 0;
+
+  const handle = (e: Element, inShadow: boolean): void => {
+    if (seen.has(e) || !isVisible(e)) return;
     seen.add(e);
     const el = e as HTMLElement & {
       form?: HTMLFormElement;
@@ -159,6 +165,20 @@ function collect(selector: string): RawDescriptor[] {
       el.getAttribute('role') === 'textbox' ||
       (tag === 'input' && !['submit', 'button', 'reset', 'image', 'hidden'].includes(type ?? 'text'));
 
+    // nth-child paths can't cross a shadow boundary; tag shadow elements instead.
+    let selectorStr: string;
+    if (inShadow) {
+      const id = `${framePrefix}s${bm++}`;
+      try {
+        el.setAttribute('data-bm-id', id);
+      } catch {
+        /* read-only */
+      }
+      selectorStr = `[data-bm-id="${id}"]`;
+    } else {
+      selectorStr = cssSelector(el);
+    }
+
     out.push({
       tag,
       type,
@@ -166,7 +186,7 @@ function collect(selector: string): RawDescriptor[] {
       name: accessibleName(el),
       editable: el.isContentEditable,
       path: structuralPath(el),
-      selector: cssSelector(el),
+      selector: selectorStr,
       href: el.getAttribute('href') || undefined,
       formAction: el.form?.getAttribute('action') || el.getAttribute('formaction') || undefined,
       formMethod: (el.form?.getAttribute('method') || el.getAttribute('formmethod') || '').toUpperCase() || undefined,
@@ -196,7 +216,27 @@ function collect(selector: string): RawDescriptor[] {
           }
         : {}),
     });
-  }
+  };
+
+  // Walk light DOM + all OPEN shadow roots, in stable document order.
+  const visit = (root: Document | ShadowRoot, inShadow: boolean): void => {
+    let els: Element[];
+    try {
+      els = Array.prototype.slice.call(root.querySelectorAll('*'));
+    } catch {
+      return;
+    }
+    for (const el of els) {
+      try {
+        if ((el as Element).matches(selector)) handle(el, inShadow);
+      } catch {
+        /* invalid for matches */
+      }
+      const sr = (el as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;
+      if (sr) visit(sr, true);
+    }
+  };
+  visit(document, false);
   return out;
 }
 
@@ -246,14 +286,69 @@ export async function drainNavLog(page: Page): Promise<string[]> {
   }
 }
 
-export async function discoverElements(page: Page): Promise<ElementDescriptor[]> {
-  let raws: RawDescriptor[];
+function frameOrigin(u: string): string {
   try {
-    raws = await withDeadline(page.evaluate(collect, INTERACTIVE_SELECTOR), 8_000, 'discover');
+    return new URL(u).origin;
   } catch {
-    return [];
+    return '';
   }
-  return raws
-    .filter((r) => !r.disabled)
-    .map((r) => ({ ...r, fp: elementFingerprint(r), structuralFp: structuralFingerprint(r) }));
+}
+
+const MAX_FRAMES = 8;
+
+export async function discoverElements(page: Page): Promise<ElementDescriptor[]> {
+  const collected: { raws: RawDescriptor[]; frameUrl?: string }[] = [];
+
+  // Main frame.
+  try {
+    const raws = await withDeadline(
+      page.evaluate(collect, { selector: INTERACTIVE_SELECTOR, framePrefix: '' }),
+      8_000,
+      'discover',
+    );
+    collected.push({ raws });
+  } catch {
+    /* nothing from main frame this step */
+  }
+
+  // Same-origin child frames (embedded editors/forms/dashboards). Stable order.
+  const mainOrigin = frameOrigin(page.url());
+  const frames = page
+    .frames()
+    .filter((f) => f !== page.mainFrame() && frameOrigin(f.url()) !== '' && frameOrigin(f.url()) === mainOrigin)
+    .sort((a, b) => (a.url() + a.name()).localeCompare(b.url() + b.name()))
+    .slice(0, MAX_FRAMES);
+  let fi = 0;
+  for (const f of frames) {
+    fi += 1;
+    try {
+      const raws = await withDeadline(
+        f.evaluate(collect, { selector: INTERACTIVE_SELECTOR, framePrefix: `f${fi}` }),
+        5_000,
+        'discover-frame',
+      );
+      collected.push({ raws, frameUrl: f.url() });
+    } catch {
+      /* frame detached or cross-origin race */
+    }
+  }
+
+  const out: ElementDescriptor[] = [];
+  for (const { raws, frameUrl } of collected) {
+    for (const r of raws) {
+      if (r.disabled) continue;
+      out.push({ ...r, frameUrl, fp: elementFingerprint(r), structuralFp: structuralFingerprint(r) });
+    }
+  }
+  return out;
+}
+
+/** Resolve a Locator for an element, in its owning frame if any. Playwright's
+ *  CSS engine pierces open shadow roots, so [data-bm-id] selectors resolve there. */
+export function locate(page: Page, selector: string, frameUrl?: string): Locator {
+  if (frameUrl) {
+    const f = page.frames().find((fr) => fr.url() === frameUrl);
+    if (f) return f.locator(selector).first();
+  }
+  return page.locator(selector).first();
 }

@@ -31,6 +31,43 @@ export async function startServer(): Promise<TestServer> {
       res.end('<!doctype html><title>Logged out</title><h1>logged out</h1>');
       return;
     }
+    // Same-origin iframe content (for iframe-discovery tests).
+    if (url === '/frame.html') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(
+        '<!doctype html><meta charset="utf-8"><title>frame</title>' +
+          '<button id="frame-btn" onclick="parent.location.hash=\'#iframe-clicked\'">Frame Action</button>' +
+          '<a href="/frame-sub">frame link</a>',
+      );
+      return;
+    }
+    // Cookie-gated auth flow (for scripted-login tests).
+    if (url === '/login') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(
+        '<!doctype html><meta charset="utf-8"><title>Sign in</title><h1>Sign in</h1>' +
+          '<form>' +
+          '<input id="user" name="user" type="text" placeholder="user" />' +
+          '<input id="pass" name="pass" type="password" placeholder="password" />' +
+          '<button id="go" type="button" onclick="document.cookie=\'bm_session=ok;path=/\';location.href=\'/app\'">Sign in</button>' +
+          '</form>',
+      );
+      return;
+    }
+    if (url === '/app' || url.startsWith('/app/')) {
+      const authed = (req.headers.cookie || '').includes('bm_session=ok');
+      if (!authed) {
+        res.writeHead(302, { location: '/login' });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(
+        '<!doctype html><meta charset="utf-8"><title>App</title><h1>App Home</h1>' +
+          '<a href="/app/projects">Projects</a> <button>Do thing</button>',
+      );
+      return;
+    }
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('not found');
   });

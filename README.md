@@ -120,6 +120,10 @@ Controls:
 
 Dangerous paths (logout/delete/cancel) and off-origin URLs are never enqueued.
 
+Discovery also reaches **inside open shadow DOM** (web-component design systems —
+Salesforce LWC, Ionic, Shoelace/Lit/Material Web) and **same-origin iframes**
+(embedded editors, wizards), so component-based apps aren't invisible to it.
+
 ## Self-populating (form completion)
 
 A fresh app is mostly empty lists — so buttonmash **creates its own data**. When
@@ -149,7 +153,18 @@ import { defineConfig } from 'buttonmash';
 export default defineConfig({
   target: 'https://staging.example.com',
   seed: 'ci',
+
+  // Auth: a saved session…
   auth: { storageState: 'playwright/.auth/user.json' },
+  // …or a scriptable login (CI-friendly; re-authenticates if the session drops
+  // mid-run). Credentials support ${ENV_VAR} so secrets stay out of the file:
+  // auth: {
+  //   loginScript: {
+  //     url: '/login', usernameSelector: '#email', passwordSelector: '#password',
+  //     submitSelector: 'button[type=submit]', username: '${E2E_USER}', password: '${E2E_PASS}',
+  //     successUrl: '/dashboard',
+  //   },
+  // },
 
   budget: { maxActions: 500, maxDurationMs: 300_000, maxDepth: 12, maxPages: 100 },
 
@@ -201,6 +216,7 @@ export default defineConfig({
 - **Reflected input** — a safe canary probe that flags possible XSS sinks (never injects executing payloads)
 - **Client-exposed secrets** (Stripe/AWS/GitHub/Slack/… keys, gitleaks-derived)
 - **Accessibility** violations via axe-core (opt-in)
+- **Session loss** — if an authed run gets redirected to a login page mid-run (expired session), it flags it and re-authenticates when a login script is configured
 - **Custom signals** — your own console/DOM/url regex rules
 
 Findings are **deduplicated** (the same bug firing 500× becomes one finding with

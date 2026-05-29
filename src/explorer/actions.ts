@@ -14,6 +14,7 @@ import type { ActionKind, ElementDescriptor, FormDescriptor } from '../core/type
 import { classifyControl } from '../guardrails/destructive';
 import type { SignalRecorder } from '../detectors/recorder';
 import type { DetectorState } from '../detectors/page-checks';
+import { locate } from './discover';
 import { fillAndSubmit, formIsUnsafe } from './form-runner';
 import { FUZZ_KEYS, fuzzValue } from './fuzz';
 
@@ -175,7 +176,7 @@ export async function executeAction(ctx: ActionContext, plan: Plan): Promise<Act
     fp: plan.el?.fp,
   };
 
-  const loc = plan.el ? page.locator(plan.el.selector).first() : null;
+  const loc = plan.el ? locate(page, plan.el.selector, plan.el.frameUrl) : null;
 
   await withDeadline(
     (async () => {

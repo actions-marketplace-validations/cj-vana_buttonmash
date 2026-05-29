@@ -35,6 +35,50 @@ export async function validateStorageState(path: string): Promise<boolean> {
   }
 }
 
+export interface LoginScript {
+  url: string;
+  usernameSelector: string;
+  passwordSelector: string;
+  submitSelector?: string;
+  username: string;
+  password: string;
+  successUrl?: string;
+  successSelector?: string;
+}
+
+/**
+ * Log in by driving the login form (CI-friendly; reused on session drop).
+ * `url` should already be absolute. Returns true if it appears to have left
+ * the login page. Never logs the password.
+ */
+export async function performScriptedLogin(
+  page: import('playwright').Page,
+  ls: LoginScript,
+  timeoutMs: number,
+): Promise<boolean> {
+  await page.goto(ls.url, { waitUntil: 'domcontentloaded', timeout: timeoutMs }).catch(() => {});
+  try {
+    await page.fill(ls.usernameSelector, ls.username, { timeout: timeoutMs });
+    await page.fill(ls.passwordSelector, ls.password, { timeout: timeoutMs });
+    if (ls.submitSelector) {
+      await page.click(ls.submitSelector, { timeout: timeoutMs });
+    } else {
+      await page.press(ls.passwordSelector, 'Enter', { timeout: timeoutMs });
+    }
+  } catch (err) {
+    logger.warn(`Login form interaction failed: ${(err as Error).message}`);
+    return false;
+  }
+  if (ls.successUrl) {
+    await page.waitForURL(new RegExp(ls.successUrl), { timeout: timeoutMs }).catch(() => {});
+  } else if (ls.successSelector) {
+    await page.locator(ls.successSelector).first().waitFor({ state: 'visible', timeout: timeoutMs }).catch(() => {});
+  } else {
+    await page.waitForLoadState('domcontentloaded', { timeout: timeoutMs }).catch(() => {});
+  }
+  return true;
+}
+
 function waitForEnter(prompt: string): Promise<void> {
   return new Promise((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });

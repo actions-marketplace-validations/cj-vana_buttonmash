@@ -78,6 +78,7 @@ function toField(el: ElementDescriptor): FieldDescriptor | null {
     options: el.options,
     radioGroupName: el.tag === 'input' && el.type === 'radio' ? el.name : undefined,
     formKey: el.formKey || 'page',
+    frameUrl: el.frameUrl,
   };
 }
 
