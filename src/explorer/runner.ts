@@ -7,7 +7,7 @@
 import { resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 
-import type { Browser } from 'playwright';
+import type { Browser, Page } from 'playwright';
 
 import type { ResolvedConfig } from '../config/load';
 import { sleep, TimeoutError, withDeadline } from '../core/async';
@@ -36,7 +36,7 @@ import { installFence, isAllowedOrigin } from '../guardrails/fence';
 import { launchBrowser, createDeterministicContext } from '../session/browser';
 import { validateStorageState } from '../session/auth';
 import { executeAction, gatePlan, planAction, type ActionContext } from './actions';
-import { discoverElements } from './discover';
+import { discoverElements, INTERACTIVE_SELECTOR } from './discover';
 import { Explorer } from './explorer';
 
 import { version } from '../version';
@@ -44,6 +44,23 @@ import { version } from '../version';
 export interface RunButtonmashResult {
   result: RunResult;
   outDir: string;
+}
+
+/**
+ * Wait for the page to be usable: the 'load' event, then (bounded) for at least
+ * one interactive element to exist. Client-rendered SPAs resolve
+ * 'domcontentloaded' before they mount, so discovery would otherwise see an
+ * empty page.
+ */
+async function awaitReady(page: Page, ms: number): Promise<void> {
+  await withDeadline(page.waitForLoadState('load'), ms, 'load').catch(() => {});
+  await page
+    .waitForFunction(
+      (sel) => document.querySelectorAll(sel as string).length > 0,
+      INTERACTIVE_SELECTOR,
+      { timeout: ms, polling: 250 },
+    )
+    .catch(() => {});
 }
 
 export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashResult> {
@@ -178,8 +195,10 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
     recorder.setContext(i, url);
     pagesVisited.add(normalizeUrl(url));
 
-    // Brief settle so async content lands before we fingerprint the state.
-    await withDeadline(page.waitForLoadState('domcontentloaded'), 3_000, 'settle').catch(() => {});
+    // Wait for the app to actually render interactive content. Client-rendered
+    // SPAs return from 'domcontentloaded' before React/Vue has mounted, so we
+    // also wait (bounded) for at least one interactive element to appear.
+    await awaitReady(page, cfg.budget.readyTimeoutMs);
 
     const signalsBefore = recorder.count();
     // Discover and act with the smallest possible gap between them, so the

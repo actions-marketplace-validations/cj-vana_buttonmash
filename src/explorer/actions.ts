@@ -124,7 +124,7 @@ export function gatePlan(plan: Plan, cfg: ResolvedConfig, recorder: SignalRecord
 
 export async function executeAction(ctx: ActionContext, plan: Plan): Promise<ActionResult> {
   const { page, rng, cfg } = ctx;
-  const budget = cfg.budget.actionTimeoutMs;
+  const opTimeout = cfg.budget.interactionTimeoutMs;
   const urlBefore = page.url();
   const result: ActionResult = {
     kind: plan.kind,
@@ -140,13 +140,13 @@ export async function executeAction(ctx: ActionContext, plan: Plan): Promise<Act
     (async () => {
       switch (plan.kind) {
         case 'click':
-          if (loc) await loc.click({ timeout: budget, force: false, noWaitAfter: true });
+          if (loc) await loc.click({ timeout: opTimeout, force: false, noWaitAfter: true });
           break;
         case 'dblclick':
-          if (loc) await loc.dblclick({ timeout: budget, noWaitAfter: true });
+          if (loc) await loc.dblclick({ timeout: opTimeout, noWaitAfter: true });
           break;
         case 'hover':
-          if (loc) await loc.hover({ timeout: budget, force: true });
+          if (loc) await loc.hover({ timeout: opTimeout, force: true });
           break;
         case 'type':
           if (loc) {
@@ -154,17 +154,17 @@ export async function executeAction(ctx: ActionContext, plan: Plan): Promise<Act
             result.value = fv.value.length > 60 ? `${fv.value.slice(0, 57)}…` : fv.value;
             if (fv.probe) ctx.state.pendingCanaries.add(fv.canary);
             if (plan.el?.editable) {
-              await loc.click({ timeout: budget }).catch(() => {});
-              await loc.pressSequentially(fv.value.slice(0, 2000), { timeout: budget });
+              await loc.click({ timeout: opTimeout }).catch(() => {});
+              await loc.pressSequentially(fv.value.slice(0, 2000), { timeout: opTimeout });
             } else {
-              await loc.fill(fv.value.slice(0, 2000), { timeout: budget });
+              await loc.fill(fv.value.slice(0, 2000), { timeout: opTimeout });
             }
           }
           break;
         case 'key': {
           const key = rng.pick(FUZZ_KEYS);
           result.value = key;
-          if (loc) await loc.press(key, { timeout: budget, noWaitAfter: true });
+          if (loc) await loc.press(key, { timeout: opTimeout, noWaitAfter: true });
           else await page.keyboard.press(key);
           break;
         }
@@ -174,7 +174,7 @@ export async function executeAction(ctx: ActionContext, plan: Plan): Promise<Act
             if (count > 0) {
               const idx = rng.int(count);
               result.value = `option#${idx}`;
-              await loc.selectOption({ index: idx }, { timeout: budget }).catch(() => {});
+              await loc.selectOption({ index: idx }, { timeout: opTimeout }).catch(() => {});
             }
           }
           break;
@@ -182,7 +182,7 @@ export async function executeAction(ctx: ActionContext, plan: Plan): Promise<Act
           if (loc) {
             const checked = rng.bool();
             result.value = String(checked);
-            await loc.setChecked(checked, { timeout: budget, force: true }).catch(() => {});
+            await loc.setChecked(checked, { timeout: opTimeout, force: true }).catch(() => {});
           }
           break;
         case 'scroll':
@@ -201,14 +201,14 @@ export async function executeAction(ctx: ActionContext, plan: Plan): Promise<Act
           break;
         }
         case 'back':
-          await page.goBack({ timeout: budget }).catch(() => {});
+          await page.goBack({ timeout: opTimeout }).catch(() => {});
           break;
         case 'forward':
-          await page.goForward({ timeout: budget }).catch(() => {});
+          await page.goForward({ timeout: opTimeout }).catch(() => {});
           break;
       }
     })(),
-    budget + 5_000,
+    cfg.budget.actionTimeoutMs + 5_000,
     `action:${plan.kind}`,
   );
 

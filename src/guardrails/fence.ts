@@ -30,6 +30,10 @@ export interface FenceOptions {
   isBillingLatched: () => boolean;
 }
 
+/** Static resource types that must never be path-blocked (they carry no
+ *  destructive side effect and blocking them breaks app/module loading). */
+const ASSET_TYPES = new Set(['script', 'stylesheet', 'image', 'font', 'media']);
+
 function safeOrigin(url: string): string {
   try {
     return new URL(url).origin;
@@ -89,9 +93,13 @@ export async function installFence(
       return route.continue();
     }
 
-    // 1. Dangerous paths (logout/delete/cancel) — block for ANY resource type,
-    //    so a same-origin POST triggered by Enter or a benign submit can't fire.
-    if (opts.blockedPathRe?.test(pathname)) return route.abort('blockedbyclient');
+    // 1. Dangerous paths (logout/delete/cancel) — block navigations, API calls,
+    //    and beacons, but NOT static asset/module loads. Otherwise a bundler
+    //    serving modules from paths like /src/features/billing/* (resource type
+    //    'script') would be blocked and the SPA would never mount.
+    if (!ASSET_TYPES.has(type) && opts.blockedPathRe?.test(pathname)) {
+      return route.abort('blockedbyclient');
+    }
 
     // 2. Off-origin document navigations.
     const offOrigin = origin !== '' && !allowed.has(origin);

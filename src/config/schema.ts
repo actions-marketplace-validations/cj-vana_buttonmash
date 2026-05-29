@@ -37,6 +37,13 @@ const BudgetSchema = z
     throttleMs: z.number().int().nonnegative().default(120),
     /** Per-action wall-clock watchdog; exceeding it is recorded as a hang. */
     actionTimeoutMs: z.number().int().positive().default(15_000),
+    /** Timeout for an individual Playwright interaction (click/fill/etc.). Kept
+     *  short so the monkey moves on quickly from elements that aren't
+     *  actionable (e.g. covered by an overlay) instead of stalling. */
+    interactionTimeoutMs: z.number().int().positive().default(4_000),
+    /** After each navigation, wait up to this long for the app to actually
+     *  render interactive content (handles client-rendered SPAs). */
+    readyTimeoutMs: z.number().int().positive().default(8_000),
   })
   .default({});
 
