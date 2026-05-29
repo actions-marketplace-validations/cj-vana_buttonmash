@@ -214,9 +214,21 @@ export async function executeAction(ctx: ActionContext, plan: Plan): Promise<Act
           if (loc) {
             const count = await loc.locator('option').count();
             if (count > 0) {
+              // Native <select>.
               const idx = rng.int(count);
               result.value = `option#${idx}`;
               await loc.selectOption({ index: idx }, { timeout: opTimeout }).catch(() => {});
+            } else {
+              // Custom ARIA combobox/listbox: open it, then click a visible option
+              // (often portal-rendered at the document root).
+              await loc.click({ timeout: opTimeout }).catch(() => {});
+              const options = page.locator('[role="option"]:visible, [role="menuitemradio"]:visible');
+              const oc = await options.count().catch(() => 0);
+              if (oc > 0) {
+                const idx = rng.int(oc);
+                result.value = `combobox option#${idx}`;
+                await options.nth(idx).click({ timeout: opTimeout }).catch(() => {});
+              }
             }
           }
           break;

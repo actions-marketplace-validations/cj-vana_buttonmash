@@ -1,0 +1,64 @@
+name: 'buttonmash'
+description: 'Run the buttonmash CI chaos monkey against a web app and fail the build on findings.'
+branding:
+  icon: 'alert-triangle'
+  color: 'orange'
+inputs:
+  target:
+    description: 'URL to test (your app must already be running/served).'
+    required: true
+  args:
+    description: 'Extra buttonmash CLI args (e.g. "--seed ci --max-actions 800 --config buttonmash.config.ts").'
+    required: false
+    default: ''
+  version:
+    description: 'buttonmash npm version to run.'
+    required: false
+    default: 'latest'
+  node-version:
+    description: 'Node version.'
+    required: false
+    default: '20'
+  browser:
+    description: 'chromium | firefox | webkit'
+    required: false
+    default: 'chromium'
+  fail-on:
+    description: 'Minimum finding severity that fails the build.'
+    required: false
+    default: 'high'
+  upload-report:
+    description: 'Upload the buttonmash-report/ directory as a build artifact.'
+    required: false
+    default: 'true'
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-node@v5
+      with:
+        node-version: ${{ inputs.node-version }}
+    - id: install
+      shell: bash
+      run: |
+        DIR="${RUNNER_TEMP:-/tmp}/buttonmash"
+        mkdir -p "$DIR" && cd "$DIR"
+        npm init -y >/dev/null 2>&1
+        npm i "buttonmash@${{ inputs.version }}" >/dev/null
+        # Install the browser matching buttonmash's bundled Playwright version.
+        npx playwright install --with-deps "${{ inputs.browser }}"
+        echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+    - shell: bash
+      working-directory: ${{ steps.install.outputs.dir }}
+      run: >
+        npx buttonmash run "${{ inputs.target }}"
+        --browser "${{ inputs.browser }}"
+        --fail-on "${{ inputs.fail-on }}"
+        --out "$GITHUB_WORKSPACE/buttonmash-report"
+        ${{ inputs.args }}
+    - if: ${{ always() && inputs.upload-report == 'true' }}
+      uses: actions/upload-artifact@v5
+      with:
+        name: buttonmash-report
+        path: buttonmash-report/
+        if-no-files-found: ignore
+        retention-days: 14

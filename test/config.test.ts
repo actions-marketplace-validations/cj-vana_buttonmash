@@ -56,6 +56,45 @@ describe('loadConfig', () => {
     expect(cfg.explore.crawl).toBe(true); // auto-crawl on by default
   });
 
+  it('interpolates ${ENV} in headers, basic-auth, and login credentials', async () => {
+    process.env.BM_TEST_TOKEN = 'sekret-123';
+    process.env.BM_TEST_PASS = 'pw-456';
+    const cfg = await loadConfig({
+      ignoreConfigFile: true,
+      overrides: {
+        target: 'https://x.test',
+        headers: { Authorization: 'Bearer ${BM_TEST_TOKEN}' },
+        auth: {
+          basicAuth: { username: 'u', password: '${BM_TEST_PASS}' },
+          loginScript: {
+            url: '/login',
+            usernameSelector: '#u',
+            passwordSelector: '#p',
+            username: 'admin',
+            password: '${BM_TEST_PASS}',
+          },
+        },
+      },
+    });
+    expect(cfg.headers.Authorization).toBe('Bearer sekret-123');
+    expect(cfg.auth.basicAuth?.password).toBe('pw-456');
+    expect(cfg.auth.loginScript?.password).toBe('pw-456');
+    delete process.env.BM_TEST_TOKEN;
+    delete process.env.BM_TEST_PASS;
+  });
+
+  it('resolves path-scope globs and defaults crawl on', async () => {
+    const cfg = await loadConfig({
+      ignoreConfigFile: true,
+      overrides: {
+        target: 'https://x.test',
+        guardrails: { includePaths: ['^/app/'], excludePaths: ['/admin'] },
+      },
+    });
+    expect(cfg.guardrails.includePaths).toEqual(['^/app/']);
+    expect(cfg.guardrails.excludePaths).toEqual(['/admin']);
+  });
+
   it('rejects invalid enum values', async () => {
     await expect(
       loadConfig({

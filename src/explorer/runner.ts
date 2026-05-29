@@ -13,7 +13,7 @@ import type { ResolvedConfig } from '../config/load';
 import { sleep, TimeoutError, withDeadline } from '../core/async';
 import { normalizeUrl, stateFingerprint } from '../core/hash';
 import { logger } from '../core/logger';
-import { compileRegexes, combineRegexes } from '../core/regex';
+import { anyMatch, compileRegexes, combineRegexes } from '../core/regex';
 import { Rng } from '../core/rng';
 import {
   SEVERITY_ORDER,
@@ -32,7 +32,7 @@ import { runPageChecks, type DetectorState } from '../detectors/page-checks';
 import { SignalRecorder } from '../detectors/recorder';
 import { attachSignalListeners, DEFAULT_CONSOLE_IGNORE, type CustomConsoleRule } from '../detectors/signals';
 import { DANGEROUS_PATH_RE } from '../guardrails/destructive';
-import { installFence, isAllowedOrigin } from '../guardrails/fence';
+import { attachPageFence, installContextFence, isAllowedOrigin } from '../guardrails/fence';
 import { launchBrowser, createDeterministicContext } from '../session/browser';
 import { performScriptedLogin, validateStorageState } from '../session/auth';
 import { executeAction, gatePlan, planAction, type ActionContext } from './actions';
@@ -116,25 +116,42 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
     pathRegexes.push(DANGEROUS_PATH_RE);
   }
   const blockedPathRe = combineRegexes(pathRegexes);
+  const includeRe = compileRegexes(cfg.guardrails.includePaths);
+  const excludeRe = compileRegexes(cfg.guardrails.excludePaths);
   const allowedSet = new Set(cfg.guardrails.allowedOrigins);
 
   const browser: Browser = await launchBrowser(cfg.browser, cfg.headless);
-  const { context, page } = await createDeterministicContext(browser, cfg, await ensureArtifactDir(outDir));
+  const handles = await createDeterministicContext(browser, cfg, await ensureArtifactDir(outDir));
+  const context = handles.context;
+  let page = handles.page; // reassigned if the renderer crashes and we recreate it
 
-  attachSignalListeners({ page, recorder, cfg, ignore, customConsole, onBillingLive: markBillingLive });
-  await installFence(
-    context,
-    page,
-    {
-      allowedOrigins: cfg.guardrails.allowedOrigins,
-      blockedPathRe,
-      blockMedia: cfg.guardrails.blockMedia,
-      billingMode: cfg.guardrails.billing.mode,
-      isBillingLatched: () => billingLive,
-    },
-    recorder,
-  );
+  const fenceOpts = {
+    allowedOrigins: cfg.guardrails.allowedOrigins,
+    blockedPathRe,
+    blockMedia: cfg.guardrails.blockMedia,
+    billingMode: cfg.guardrails.billing.mode,
+    isBillingLatched: () => billingLive,
+  };
+  // Page-bound wiring, re-attachable to a recreated page after a crash.
+  const wirePage = (p: typeof page): void => {
+    attachSignalListeners({ page: p, recorder, cfg, ignore, customConsole, onBillingLive: markBillingLive });
+    attachPageFence(p, fenceOpts, recorder);
+  };
+  const setupPage = async (): Promise<typeof page> => {
+    const p = await context.newPage(); // inherits context init scripts + routes
+    p.setDefaultTimeout(cfg.budget.actionTimeoutMs);
+    p.setDefaultNavigationTimeout(Math.max(cfg.budget.actionTimeoutMs, 30_000));
+    wirePage(p);
+    return p;
+  };
+
+  await installContextFence(context, fenceOpts, recorder);
+  wirePage(page);
   await startTracing(context, cfg);
+
+  const MAX_CRASHES = 5;
+  let crashCount = 0;
+  let lastUrl = cfg.target;
 
   const explorer = new Explorer(rng, cfg.explore.epsilon);
   const navTimeout = Math.max(cfg.budget.actionTimeoutMs, 30_000);
@@ -146,6 +163,7 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
   const FRONTIER_CAP = 5000;
   const visited = new Set<string>(); // normalized URLs already explored
   const queued = new Set<string>(); // normalized URLs currently in the frontier
+  const crashedUrls = new Set<string>(); // pages that crashed the renderer — don't revisit
   const frontier: string[] = []; // absolute URLs to visit (FIFO)
 
   const enqueue = (raw: string): void => {
@@ -158,8 +176,10 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
     if (!allowedSet.has(u.origin)) return;
     if (blockedPathRe?.test(u.pathname)) return;
+    if (excludeRe.length && anyMatch(u.pathname, excludeRe)) return;
+    if (includeRe.length && !anyMatch(u.pathname, includeRe)) return;
     const n = normalizeUrl(raw);
-    if (visited.has(n) || queued.has(n) || frontier.length >= FRONTIER_CAP) return;
+    if (visited.has(n) || queued.has(n) || crashedUrls.has(n) || frontier.length >= FRONTIER_CAP) return;
     queued.add(n);
     frontier.push(raw);
   };
@@ -280,8 +300,18 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
       break;
     }
     if (page.isClosed()) {
-      stopReason = 'page closed (crash)';
-      break;
+      crashCount += 1;
+      recorder.add('crash', `renderer crashed on ${lastUrl}`, { severity: 'critical', url: lastUrl });
+      if (crashCount > MAX_CRASHES) {
+        stopReason = `too many renderer crashes (${crashCount})`;
+        break;
+      }
+      crashedUrls.add(normalizeUrl(lastUrl)); // don't revisit the page that crashed
+      page = await setupPage();
+      depth = 0;
+      sinceNew = 0;
+      if (!(await moveOn())) await gotoUrl(cfg.target);
+      continue;
     }
 
     // Move to the next page when this one is exhausted (saturated), we've gone
@@ -323,6 +353,7 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
     if (authConfigured && !isLoginPage(url)) wasAuthenticated = true;
 
     const nUrl = normalizeUrl(url);
+    lastUrl = url;
     recorder.setContext(i, url);
     pagesVisited.add(nUrl);
     visited.add(nUrl);
@@ -487,6 +518,27 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
   const failThreshold = SEVERITY_ORDER[cfg.failOn];
   const exitCode = findings.some((f) => SEVERITY_ORDER[f.severity] >= failThreshold) ? 1 : 0;
 
+  // Redacted snapshot of the resolved config for faithful cross-machine replay.
+  const resolvedConfig = JSON.parse(JSON.stringify(cfg)) as {
+    configPath?: unknown;
+    headers?: Record<string, string>;
+    auth?: {
+      storageState?: string;
+      loginScript?: { username?: string; password?: string };
+      basicAuth?: { username: string; password: string };
+    };
+  } & Record<string, unknown>;
+  delete resolvedConfig.configPath;
+  if (resolvedConfig.auth?.storageState) resolvedConfig.auth.storageState = '<storageState>';
+  if (resolvedConfig.auth?.loginScript) {
+    resolvedConfig.auth.loginScript.username = '***';
+    resolvedConfig.auth.loginScript.password = '***';
+  }
+  if (resolvedConfig.auth?.basicAuth) resolvedConfig.auth.basicAuth = { username: '***', password: '***' };
+  if (resolvedConfig.headers) {
+    for (const k of Object.keys(resolvedConfig.headers)) resolvedConfig.headers[k] = '***';
+  }
+
   const finishedAt = new Date();
   const result: RunResult = {
     schemaVersion: 1,
@@ -517,6 +569,7 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
     },
     actions: actionLog,
     findings,
+    resolvedConfig,
   };
 
   return { result, outDir };

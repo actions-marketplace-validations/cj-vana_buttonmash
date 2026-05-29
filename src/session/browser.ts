@@ -98,6 +98,8 @@ export async function createDeterministicContext(
     serviceWorkers: 'block',
     ignoreHTTPSErrors: true,
     acceptDownloads: false, // never let a random click write a file to disk
+    ...(Object.keys(cfg.headers).length ? { extraHTTPHeaders: cfg.headers } : {}),
+    ...(cfg.auth.basicAuth ? { httpCredentials: cfg.auth.basicAuth } : {}),
     ...(cfg.report.captureVideo && videoDir
       ? { recordVideo: { dir: videoDir, size: cfg.viewport } }
       : {}),

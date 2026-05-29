@@ -263,6 +263,9 @@ export interface RunResult {
   stats: RunStats;
   actions: LoggedAction[];
   findings: Finding[];
+  /** Full resolved config used for this run (secrets redacted) — for faithful
+   *  cross-machine replay. */
+  resolvedConfig?: Record<string, unknown>;
 }
 
 /** Exit codes follow the pytest/ESLint convention. */

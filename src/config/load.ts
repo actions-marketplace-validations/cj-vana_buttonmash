@@ -129,12 +129,17 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<ResolvedConfig
 
   const cfg = parsed.data;
 
-  // Interpolate ${ENV_VAR} in login credentials so secrets stay out of config.
+  // Interpolate ${ENV_VAR} in credentials/headers so secrets stay out of config.
+  const interp = (s: string): string => s.replace(/\$\{(\w+)\}/g, (_m, k: string) => process.env[k] ?? '');
   if (cfg.auth.loginScript) {
-    const interp = (s: string): string => s.replace(/\$\{(\w+)\}/g, (_m, k: string) => process.env[k] ?? '');
     cfg.auth.loginScript.username = interp(cfg.auth.loginScript.username);
     cfg.auth.loginScript.password = interp(cfg.auth.loginScript.password);
   }
+  if (cfg.auth.basicAuth) {
+    cfg.auth.basicAuth.username = interp(cfg.auth.basicAuth.username);
+    cfg.auth.basicAuth.password = interp(cfg.auth.basicAuth.password);
+  }
+  for (const k of Object.keys(cfg.headers)) cfg.headers[k] = interp(cfg.headers[k]!);
 
   const target = cfg.target;
   if (!target) {

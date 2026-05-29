@@ -47,13 +47,8 @@ export function isAllowedOrigin(url: string, allowed: ReadonlySet<string>): bool
   return o === '' || allowed.has(o);
 }
 
-/** Install all fence listeners on a context + its main page. */
-export async function installFence(
-  context: BrowserContext,
-  page: Page,
-  opts: FenceOptions,
-  recorder: SignalRecorder,
-): Promise<void> {
+/** Page-level fence handlers. Re-attached whenever a page is (re)created. */
+export function attachPageFence(page: Page, opts: FenceOptions, recorder: SignalRecorder): void {
   const allowed = new Set(opts.allowedOrigins);
 
   // Never auto-confirm destructive native dialogs — always dismiss.
@@ -66,16 +61,38 @@ export async function installFence(
     }
   });
 
+  // Decline file-chooser dialogs so a click on <input type=file> can't hang.
+  page.on('filechooser', (fc) => void fc.setFiles([]).catch(() => {}));
+
+  page.on('popup', (p) => void p.close().catch(() => {}));
+
+  // Catch JS-driven navigations that slipped through routing.
+  page.on('framenavigated', async (frame) => {
+    if (frame !== page.mainFrame()) return;
+    const o = safeOrigin(frame.url());
+    if (o !== '' && !allowed.has(o)) {
+      recorder.add('custom', `recovered off-origin navigation → ${frame.url()}`, { severity: 'low' });
+      await page.goBack().catch(() => {});
+    }
+  });
+}
+
+/** Context-level fence — installed once; applies to every page in the context. */
+export async function installContextFence(
+  context: BrowserContext,
+  opts: FenceOptions,
+  recorder: SignalRecorder,
+): Promise<void> {
+  const allowed = new Set(opts.allowedOrigins);
+
   // Close any popup / new tab that escapes to a foreign origin.
-  const closeStray = async (p: Page) => {
+  context.on('page', (p) => {
     const u = p.url();
     if (u && u !== 'about:blank' && !allowed.has(safeOrigin(u))) {
       recorder.add('custom', `closed popup/new-tab → ${u}`, { severity: 'info' });
-      await p.close().catch(() => {});
+      void p.close().catch(() => {});
     }
-  };
-  context.on('page', (p) => void closeStray(p));
-  page.on('popup', (p) => void p.close().catch(() => {}));
+  });
 
   // Route-level fence — the network layer is the real safety boundary.
   await context.route('**/*', (route) => {
@@ -124,18 +141,6 @@ export async function installFence(
       return route.abort('blockedbyclient');
     }
     return route.continue();
-  });
-
-  // Catch JS-driven navigations that slipped through routing.
-  page.on('framenavigated', async (frame) => {
-    if (frame !== page.mainFrame()) return;
-    const o = safeOrigin(frame.url());
-    if (o !== '' && !allowed.has(o)) {
-      recorder.add('custom', `recovered off-origin navigation → ${frame.url()}`, {
-        severity: 'low',
-      });
-      await page.goBack().catch(() => {});
-    }
   });
 }
 

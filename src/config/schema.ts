@@ -36,6 +36,8 @@ const AuthSchema = z
   .object({
     /** Path to a Playwright storageState JSON (cookies + localStorage). */
     storageState: z.string().optional(),
+    /** HTTP basic-auth credentials (proxies / staging). ${ENV_VAR} supported. */
+    basicAuth: z.object({ username: z.string(), password: z.string() }).optional(),
     /** A scriptable login: buttonmash logs in fresh each run (CI-friendly) and
      *  re-authenticates if the session drops mid-run. */
     loginScript: LoginScriptSchema.optional(),
@@ -175,6 +177,11 @@ const GuardrailsSchema = z
     allowedOrigins: z.array(z.string()).default([]),
     /** Extra regex strings for paths to hard-block, even on allowed origins. */
     blockedPathPatterns: z.array(z.string()).default([]),
+    /** If non-empty, only crawl paths matching one of these regexes (scope a
+     *  sweep to e.g. ^/app/). */
+    includePaths: z.array(z.string()).default([]),
+    /** Never crawl paths matching these regexes. */
+    excludePaths: z.array(z.string()).default([]),
     destructive: DestructiveSchema,
     billing: BillingSchema,
     secrets: SecretsSchema,
@@ -252,6 +259,10 @@ export const ConfigSchema = z.object({
   seed: z.string().optional(),
   browser: BrowserSchema.default('chromium'),
   headless: z.boolean().default(true),
+  /** Extra HTTP headers sent with every request (auth proxies, feature flags).
+   *  Values support ${ENV_VAR} interpolation. */
+  headers: z.record(z.string()).default({}),
+  /** Emulate a device viewport, e.g. { width: 390, height: 844 } for mobile. */
   viewport: ViewportSchema,
   auth: AuthSchema,
   budget: BudgetSchema,

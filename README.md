@@ -72,6 +72,27 @@ broke at or above your fail threshold.
 
 ## Use in CI (GitHub Actions)
 
+The quickest way is the bundled composite action (installs the browser + runs
+buttonmash + uploads the report):
+
+```yaml
+name: buttonmash
+on: [pull_request]
+jobs:
+  buttonmash:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      # start your app under test here (e.g. npm ci && npm run start &) and wait for it…
+      - uses: cj-vana/buttonmash@v0.1.7
+        with:
+          target: http://localhost:3000
+          args: --seed ci --max-actions 800
+```
+
+Or wire it by hand for full control:
+
 ```yaml
 name: buttonmash
 on: [pull_request]
@@ -124,6 +145,12 @@ Discovery also reaches **inside open shadow DOM** (web-component design systems 
 Salesforce LWC, Ionic, Shoelace/Lit/Material Web) and **same-origin iframes**
 (embedded editors, wizards), so component-based apps aren't invisible to it.
 
+It's built to survive messy real apps on long CI sweeps: it **recovers from
+renderer crashes** (recreates the page and continues, skipping the page that
+crashed), opens **custom ARIA dropdowns** and picks an option, **declines file
+pickers** so a file input can't hang the run, and you can **scope the crawl**
+with `guardrails.includePaths` / `excludePaths`.
+
 ## Self-populating (form completion)
 
 A fresh app is mostly empty lists — so buttonmash **creates its own data**. When
@@ -168,6 +195,12 @@ export default defineConfig({
 
   budget: { maxActions: 500, maxDurationMs: 300_000, maxDepth: 12, maxPages: 100 },
 
+  // Point it at any deployment: extra headers (auth proxy / feature flags),
+  // HTTP basic-auth, and a device viewport. ${ENV_VAR} keeps secrets in env.
+  // headers: { 'X-Feature-Flag': 'on', Authorization: 'Bearer ${API_TOKEN}' },
+  // viewport: { width: 390, height: 844 }, // mobile
+  // auth: { basicAuth: { username: '${BASIC_USER}', password: '${BASIC_PASS}' } },
+
   // Auto-crawl is on by default; `routes` are optional hints for pages nothing
   // links to (e.g. a deep editor). The crawl discovers everything else.
   // routes: ['/dashboard', '/settings/billing'],
@@ -175,6 +208,8 @@ export default defineConfig({
 
   guardrails: {
     // allowedOrigins: ['https://staging.example.com'], // defaults to target origin
+    // includePaths: ['^/app/'],     // scope the crawl (regex on pathname)
+    // excludePaths: ['/admin'],     // never crawl these
     billing: { mode: 'refuse' },   // refuse | warn | off
     // dryRun: true,                // read-only: explore without submitting
     destructive: { enabled: true, extraVerbs: ['archivar'] },
