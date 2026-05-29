@@ -24,7 +24,7 @@ beforeAll(async () => {
     seed: 'e2e-fixed',
     headless: true,
     logLevel: 'silent',
-    budget: { maxActions: 160, maxDurationMs: 60_000, throttleMs: 30 },
+    budget: { maxActions: 260, maxDurationMs: 90_000, throttleMs: 30 },
     report: {
       outDir,
       formats: ['json'],
@@ -64,6 +64,13 @@ describe('e2e against the buggy app', () => {
     const all = result.findings.map((f) => `${f.title} ${f.description}`).join('\n');
     expect(all).not.toContain('DELETED-EVERYTHING');
     expect(all).not.toContain('PAID-REAL-MONEY');
+  });
+
+  it('autonomously completes the create-flow (fills + submits a form)', () => {
+    expect(result.stats.recordsCreated).toBeGreaterThanOrEqual(1);
+    expect(result.actions.some((a) => a.kind === 'submit-form' && a.submitted)).toBe(true);
+    // and following the created record left an #/items route in the trace
+    expect(result.actions.some((a) => a.url.includes('#/items/'))).toBe(true);
   });
 
   it('does NOT false-positive on test-mode billing', () => {

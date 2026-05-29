@@ -25,7 +25,9 @@ export type ActionKind =
   | 'check'
   | 'back'
   | 'forward'
-  | 'resize';
+  | 'resize'
+  /** Fill a form's fields with valid data and submit it (a create-flow). */
+  | 'submit-form';
 
 /** A serializable description of a discovered interactive element. */
 export interface ElementDescriptor {
@@ -49,6 +51,75 @@ export interface ElementDescriptor {
   formMethod?: string;
   /** True when discovery saw the element as disabled. */
   disabled?: boolean;
+  // --- form-field constraints (present for inputs/selects/textareas) ---
+  required?: boolean;
+  pattern?: string;
+  min?: string;
+  max?: string;
+  step?: string;
+  minLength?: number;
+  maxLength?: number;
+  autocomplete?: string;
+  placeholder?: string;
+  /** Resolved field label (label[for]/wrapping/aria-labelledby/aria-label). */
+  label?: string;
+  /** For <select>: option value/label/disabled. */
+  options?: { value: string; label: string; disabled: boolean }[];
+  /** Stable key of the owning form/dialog scope (or 'page'). */
+  formKey?: string;
+  /** True if this control submits its form. */
+  isSubmit?: boolean;
+}
+
+/** The fillable subset of an input, used by the form completer. */
+export interface FieldDescriptor {
+  selector: string;
+  fp: string;
+  kind:
+    | 'text'
+    | 'email'
+    | 'number'
+    | 'date'
+    | 'tel'
+    | 'url'
+    | 'password'
+    | 'checkbox'
+    | 'radio'
+    | 'select'
+    | 'textarea'
+    | 'contenteditable'
+    | 'color'
+    | 'range'
+    | 'file';
+  name: string;
+  label: string;
+  placeholder: string;
+  required: boolean;
+  pattern?: string;
+  min?: string;
+  max?: string;
+  step?: string;
+  minLength?: number;
+  maxLength?: number;
+  autocomplete?: string;
+  options?: { value: string; label: string; disabled: boolean }[];
+  radioGroupName?: string;
+  formKey: string;
+}
+
+/** A discovered create-surface: a cluster of fields + a submit control. */
+export interface FormDescriptor {
+  formKey: string;
+  /** Stable fingerprint of the form (for coverage tracking). */
+  fpKey: string;
+  fields: FieldDescriptor[];
+  submit?: ElementDescriptor;
+  /** Next/Continue controls for multi-step wizards. */
+  nextControls: ElementDescriptor[];
+  /** A credit-card / payment field is present → never submit. */
+  hasLivePaymentField: boolean;
+  /** Looks like a signup/login/auth form → don't submit (would mutate session). */
+  isAuthForm: boolean;
 }
 
 /** A single action the explorer took, forming a replayable trace. */
@@ -66,6 +137,11 @@ export interface LoggedAction {
   url: string;
   ts: number;
   navigated?: boolean;
+  // --- set for 'submit-form' actions ---
+  formKey?: string;
+  fieldsFilled?: number;
+  retries?: number;
+  submitted?: boolean;
 }
 
 /** Raw kinds of signal the harness captures from the browser. */
@@ -85,6 +161,7 @@ export type SignalKind =
   | 'reflected-input'
   | 'secret-leak'
   | 'billing-live'
+  | 'form-validation'
   | 'custom'
   | 'driver';
 
@@ -145,6 +222,8 @@ export interface RunStats {
   actionsTaken: number;
   pagesVisited: number;
   statesDiscovered: number;
+  /** Records successfully created via completed forms. */
+  recordsCreated: number;
   findingsBySeverity: Record<Severity, number>;
 }
 

@@ -100,15 +100,68 @@ function collect(selector: string): RawDescriptor[] {
     return '';
   };
 
+  const labelFor = (e: Element): string => {
+    const el = e as HTMLElement & { labels?: NodeListOf<HTMLLabelElement>; id?: string };
+    const al = el.getAttribute('aria-label');
+    if (al) return al.trim();
+    const lb = el.getAttribute('aria-labelledby');
+    if (lb) {
+      const t = lb
+        .split(/\s+/)
+        .map((id) => document.getElementById(id)?.textContent || '')
+        .join(' ')
+        .trim();
+      if (t) return t.slice(0, 80);
+    }
+    if (el.labels && el.labels.length) {
+      const t = (el.labels[0]?.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t) return t.slice(0, 80);
+    }
+    const wrap = el.closest('label');
+    if (wrap?.textContent) return wrap.textContent.replace(/\s+/g, ' ').trim().slice(0, 80);
+    return '';
+  };
+
+  const scopeKey = (e: Element): string => {
+    const form = (e as HTMLInputElement).form;
+    const scope =
+      form ||
+      e.closest('[role="dialog"],dialog,[aria-modal="true"],.modal,.drawer,.wizard,form,fieldset');
+    return scope ? structuralPath(scope) : 'page';
+  };
+
+  const numAttr = (el: HTMLElement, prop: 'minLength' | 'maxLength'): number | undefined => {
+    const v = (el as unknown as Record<string, number>)[prop];
+    return typeof v === 'number' && v >= 0 ? v : undefined;
+  };
+
   const out: RawDescriptor[] = [];
   const seen = new Set<Element>();
   for (const e of Array.from(document.querySelectorAll(selector))) {
     if (seen.has(e) || !isVisible(e)) continue;
     seen.add(e);
-    const el = e as HTMLElement & { form?: HTMLFormElement; type?: string; disabled?: boolean };
+    const el = e as HTMLElement & {
+      form?: HTMLFormElement;
+      type?: string;
+      disabled?: boolean;
+      required?: boolean;
+      options?: HTMLOptionsCollection;
+    };
+    const tag = el.tagName.toLowerCase();
+    const type = typeof el.type === 'string' ? el.type : null;
+    const isSubmit =
+      (tag === 'input' && type === 'submit') ||
+      (tag === 'button' && (!el.getAttribute('type') || el.getAttribute('type') === 'submit') && !!el.form);
+    const isFormField =
+      tag === 'select' ||
+      tag === 'textarea' ||
+      el.isContentEditable ||
+      el.getAttribute('role') === 'textbox' ||
+      (tag === 'input' && !['submit', 'button', 'reset', 'image', 'hidden'].includes(type ?? 'text'));
+
     out.push({
-      tag: el.tagName.toLowerCase(),
-      type: typeof el.type === 'string' ? el.type : null,
+      tag,
+      type,
       role: el.getAttribute('role'),
       name: accessibleName(el),
       editable: el.isContentEditable,
@@ -118,6 +171,30 @@ function collect(selector: string): RawDescriptor[] {
       formAction: el.form?.getAttribute('action') || el.getAttribute('formaction') || undefined,
       formMethod: (el.form?.getAttribute('method') || el.getAttribute('formmethod') || '').toUpperCase() || undefined,
       disabled: el.disabled === true,
+      formKey: scopeKey(el),
+      isSubmit,
+      ...(isFormField
+        ? {
+            required: el.required === true || el.getAttribute('aria-required') === 'true',
+            pattern: el.getAttribute('pattern') || undefined,
+            min: el.getAttribute('min') || undefined,
+            max: el.getAttribute('max') || undefined,
+            step: el.getAttribute('step') || undefined,
+            minLength: numAttr(el, 'minLength'),
+            maxLength: numAttr(el, 'maxLength'),
+            autocomplete: el.getAttribute('autocomplete') || undefined,
+            placeholder: el.getAttribute('placeholder') || undefined,
+            label: labelFor(el),
+            options:
+              tag === 'select' && el.options
+                ? Array.from(el.options).map((o) => ({
+                    value: o.value,
+                    label: (o.textContent || '').trim().slice(0, 60),
+                    disabled: o.disabled,
+                  }))
+                : undefined,
+          }
+        : {}),
     });
   }
   return out;

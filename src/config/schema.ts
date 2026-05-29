@@ -76,6 +76,34 @@ const ExploreSchema = z
      *  reachable page. With this on, pointing at the site root sweeps the whole
      *  site — `routes` become optional hints for pages nothing links to. */
     crawl: z.boolean().default(true),
+    /** Autonomous create-flow completion: fill forms with valid data and submit
+     *  so empty apps get populated and deep editors get exercised, with no
+     *  per-site config. Safe-by-default (never submits destructive/billing/auth
+     *  forms) and seeded. */
+    forms: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** false → fill fields but never click submit. dryRun also forces this. */
+        submit: z.boolean().default(true),
+        /** Seeded probability of choosing "construct" (fill+submit a fresh
+         *  form) over a normal random action when a create-surface exists. */
+        weight: z.number().min(0).max(1).default(0.5),
+        /** Per-field probability of also filling non-required fields. */
+        fillOptionalProbability: z.number().min(0).max(1).default(0.5),
+        /** Repair-and-resubmit cycles when post-submit validation fails. */
+        maxRetries: z.number().int().nonnegative().default(2),
+        /** Per-form cap on completion attempts (avoids resubmit loops). */
+        maxAttemptsPerForm: z.number().int().positive().default(2),
+        /** Global cap on successful submissions per run. */
+        maxRecords: z.number().int().nonnegative().default(40),
+        /** Never populate <input type=file>. */
+        skipFileUploads: z.boolean().default(true),
+        /** Submit signup/login/auth forms (mutates session) — off by default. */
+        submitAuthForms: z.boolean().default(false),
+        /** Extra create-intent verbs appended to the primary-action detector. */
+        createVerbs: z.array(z.string()).default([]),
+      })
+      .default({}),
   })
   .default({});
 

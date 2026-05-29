@@ -37,6 +37,7 @@ import { launchBrowser, createDeterministicContext } from '../session/browser';
 import { validateStorageState } from '../session/auth';
 import { executeAction, gatePlan, planAction, type ActionContext } from './actions';
 import { collectLinks, discoverElements, drainNavLog, INTERACTIVE_SELECTOR } from './discover';
+import { groupForms } from './forms';
 import { Explorer } from './explorer';
 
 import { version } from '../version';
@@ -221,6 +222,7 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
 
   let depth = 0;
   let sinceNew = 0;
+  let recordsCreated = 0;
   let stopReason = 'budget exhausted';
 
   for (let i = 0; i < cfg.budget.maxActions; i++) {
@@ -295,14 +297,43 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
       continue;
     }
 
-    const el = explorer.choose(stateHash, elements);
-    const plan = gatePlan(planAction(rng, cfg, el), cfg, recorder);
+    // Decide: CONSTRUCT (fill+submit a fresh create-surface to populate the app
+    // and reach deep editors) or normal explore. Construct only when forms are
+    // enabled, a fresh create-surface exists, the global record cap allows, and
+    // a seeded coin says so — otherwise fall through to today's behavior.
+    const forms = cfg.explore.forms.enabled
+      ? groupForms(elements, cfg.explore.forms.createVerbs)
+      : [];
+    let plan: ReturnType<typeof planAction> | undefined;
+    let chosenForm: ReturnType<typeof explorer.chooseForm>;
+    if (
+      forms.length > 0 &&
+      recordsCreated < cfg.explore.forms.maxRecords &&
+      rng.bool(cfg.explore.forms.weight)
+    ) {
+      chosenForm = explorer.chooseForm(forms, cfg.explore.forms.maxAttemptsPerForm);
+      if (chosenForm) {
+        explorer.recordFormAttempt(chosenForm.fpKey);
+        plan = gatePlan({ kind: 'submit-form', form: chosenForm }, cfg, recorder);
+      }
+    }
+    if (!plan) {
+      const el = explorer.choose(stateHash, elements);
+      plan = gatePlan(planAction(rng, cfg, el), cfg, recorder);
+    }
     const ctx: ActionContext = { page, rng, cfg, runId: cfg.seed, step: i, state, recorder };
 
     let navigated = false;
     try {
       const res = await executeAction(ctx, plan);
       navigated = res.navigated;
+      if (res.submitted && chosenForm) {
+        recordsCreated += 1;
+        explorer.markFormCompleted(chosenForm.fpKey);
+        // Follow into the created record: reset so the frontier/oracles re-run.
+        depth = 0;
+        sinceNew = 0;
+      }
       actionLog.push({
         step: i,
         kind: res.kind,
@@ -314,6 +345,10 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
         url,
         ts: Date.now(),
         navigated: res.navigated,
+        formKey: res.formKey,
+        fieldsFilled: res.fieldsFilled,
+        retries: res.retries,
+        submitted: res.submitted,
       });
       logger.debug(`#${i} ${res.kind}${res.target ? ` "${res.target}"` : ''}${res.value ? ` = ${res.value}` : ''}`);
     } catch (err) {
@@ -394,6 +429,7 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
       actionsTaken: actionLog.length,
       pagesVisited: pagesVisited.size,
       statesDiscovered: explorer.statesDiscovered,
+      recordsCreated,
       findingsBySeverity,
     },
     actions: actionLog,

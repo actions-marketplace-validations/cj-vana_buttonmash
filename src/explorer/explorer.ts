@@ -5,17 +5,39 @@
  * through the seeded {@link Rng} so a seed reproduces the run.
  */
 import type { Rng } from '../core/rng';
-import type { ElementDescriptor } from '../core/types';
+import type { ElementDescriptor, FormDescriptor } from '../core/types';
 
 export class Explorer {
   private seenStates = new Set<string>();
   /** `${stateHash}:${fp}` pairs already exercised. */
   private exercised = new Set<string>();
+  /** Create-surfaces (by fpKey) successfully completed. */
+  private completedForms = new Set<string>();
+  /** Attempts per create-surface fpKey. */
+  private formAttempts = new Map<string, number>();
 
   constructor(
     private rng: Rng,
     private epsilon = 0.15,
   ) {}
+
+  /** Pick an un-completed create-surface still under its attempt cap. */
+  chooseForm(forms: readonly FormDescriptor[], maxAttempts: number): FormDescriptor | undefined {
+    const eligible = forms.filter(
+      (f) => !this.completedForms.has(f.fpKey) && (this.formAttempts.get(f.fpKey) ?? 0) < maxAttempts,
+    );
+    if (eligible.length === 0) return undefined;
+    const sorted = [...eligible].sort((a, b) => a.fpKey.localeCompare(b.fpKey));
+    return this.rng.pick(sorted);
+  }
+
+  recordFormAttempt(fpKey: string): void {
+    this.formAttempts.set(fpKey, (this.formAttempts.get(fpKey) ?? 0) + 1);
+  }
+
+  markFormCompleted(fpKey: string): void {
+    this.completedForms.add(fpKey);
+  }
 
   isNewState(stateHash: string): boolean {
     return !this.seenStates.has(stateHash);

@@ -22,6 +22,7 @@ function result(over: Partial<RunResult['run']> & { seed?: string }): RunResult 
       actionsTaken: 0,
       pagesVisited: 0,
       statesDiscovered: 0,
+      recordsCreated: 0,
       findingsBySeverity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
     },
     actions: [],

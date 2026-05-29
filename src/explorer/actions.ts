@@ -10,13 +10,18 @@ import type { ResolvedConfig } from '../config/load';
 import { withDeadline } from '../core/async';
 import { normalizeUrl } from '../core/hash';
 import type { Rng } from '../core/rng';
-import type { ActionKind, ElementDescriptor } from '../core/types';
+import type { ActionKind, ElementDescriptor, FormDescriptor } from '../core/types';
 import { classifyControl } from '../guardrails/destructive';
 import type { SignalRecorder } from '../detectors/recorder';
 import type { DetectorState } from '../detectors/page-checks';
+import { fillAndSubmit, formIsUnsafe } from './form-runner';
 import { FUZZ_KEYS, fuzzValue } from './fuzz';
 
-const PAGE_LEVEL: ActionKind[] = ['scroll', 'resize', 'back', 'forward'];
+/** Action kinds that carry a tunable weight (everything except 'submit-form',
+ *  which the runner elects explicitly rather than via weighted random pick). */
+type WeightedKind = Exclude<ActionKind, 'submit-form'>;
+
+const PAGE_LEVEL: WeightedKind[] = ['scroll', 'resize', 'back', 'forward'];
 const TEXT_TYPES = new Set([null, '', 'text', 'search', 'email', 'url', 'tel', 'password', 'number']);
 
 export interface ActionContext {
@@ -32,6 +37,7 @@ export interface ActionContext {
 export interface Plan {
   kind: ActionKind;
   el?: ElementDescriptor;
+  form?: FormDescriptor;
 }
 
 export interface ActionResult {
@@ -41,6 +47,11 @@ export interface ActionResult {
   fp?: string;
   value?: string;
   navigated: boolean;
+  // --- set for 'submit-form' ---
+  submitted?: boolean;
+  fieldsFilled?: number;
+  retries?: number;
+  formKey?: string;
 }
 
 function isTextEntry(el: ElementDescriptor): boolean {
@@ -61,8 +72,8 @@ function isToggle(el: ElementDescriptor): boolean {
   );
 }
 
-function elementKinds(el: ElementDescriptor): ActionKind[] {
-  const kinds: ActionKind[] = ['click', 'dblclick', 'hover', 'key'];
+function elementKinds(el: ElementDescriptor): WeightedKind[] {
+  const kinds: WeightedKind[] = ['click', 'dblclick', 'hover', 'key'];
   if (isTextEntry(el)) kinds.push('type');
   if (el.tag === 'select' || el.role === 'combobox') kinds.push('select');
   if (isToggle(el)) kinds.push('check');
@@ -103,6 +114,20 @@ const MUTATING: ReadonlySet<ActionKind> = new Set([
 export function gatePlan(plan: Plan, cfg: ResolvedConfig, recorder: SignalRecorder): Plan {
   const { el, kind } = plan;
 
+  // Form completion: the form-runner enforces dry-run (fills, doesn't submit),
+  // so only block here if the form itself is unsafe (payment/auth/destructive).
+  if (kind === 'submit-form') {
+    if (!plan.form) return { kind: 'scroll' };
+    const unsafe = formIsUnsafe(plan.form, cfg);
+    if (unsafe) {
+      recorder.add('custom', `skipped form (${unsafe}): ${plan.form.submit?.name || plan.form.formKey}`, {
+        severity: 'info',
+      });
+      return { kind: 'scroll' };
+    }
+    return plan;
+  }
+
   if (el && cfg.guardrails.destructive.enabled && !cfg.guardrails.destructive.allow) {
     const c = classifyControl(el, cfg.guardrails.destructive.extraVerbs);
     if (c.block && MUTATING.has(kind)) {
@@ -124,6 +149,22 @@ export function gatePlan(plan: Plan, cfg: ResolvedConfig, recorder: SignalRecord
 
 export async function executeAction(ctx: ActionContext, plan: Plan): Promise<ActionResult> {
   const { page, rng, cfg } = ctx;
+
+  // Create-flow: fill the form with valid data and submit it (own timeouts).
+  if (plan.kind === 'submit-form' && plan.form) {
+    const r = await fillAndSubmit(ctx, plan.form);
+    return {
+      kind: 'submit-form',
+      target: plan.form.submit?.name || undefined,
+      value: `${r.fieldsFilled} fields${r.submitted ? ' → created' : r.abandoned ? ' (skipped)' : ' (rejected)'}`,
+      navigated: r.navigated,
+      submitted: r.submitted,
+      fieldsFilled: r.fieldsFilled,
+      retries: r.retries,
+      formKey: plan.form.formKey,
+    };
+  }
+
   const opTimeout = cfg.budget.interactionTimeoutMs;
   const urlBefore = page.url();
   const result: ActionResult = {

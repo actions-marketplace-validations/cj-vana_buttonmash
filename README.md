@@ -8,7 +8,9 @@
 page on its own** — discovering links and in-app (SPA) navigations as it goes —
 then on each page finds every button/link/input and mashes them: clicking,
 double-clicking, typing random keystrokes, selecting, scrolling, resizing,
-navigating. When something breaks (an uncaught error, a 500, a crash, a blank
+navigating. It even **completes create-flows** — filling forms with valid data
+and submitting them — so empty apps populate themselves and deep editors get
+exercised. When something breaks (an uncaught error, a 500, a crash, a blank
 screen, a broken image…) it writes a report and **fails your build**.
 
 It's deterministic (seeded, so any failure replays), bounded (action/time
@@ -117,6 +119,24 @@ Controls:
 - `explore.crawl: false` — disable auto-crawl and only sweep `target` + `routes`.
 
 Dangerous paths (logout/delete/cancel) and off-origin URLs are never enqueued.
+
+## Self-populating (form completion)
+
+A fresh app is mostly empty lists — so buttonmash **creates its own data**. When
+it finds a fillable form (or opens a "New/Add/Create" flow), it fills every
+required field — and a fraction of optional ones — with **valid, deterministic**
+values inferred from each field's type/label/pattern/min-max/options (real
+emails, in-range numbers, seeded dates, a chosen `<select>` option, mirrored
+password-confirm), clicks the form's **safe** submit, repairs on validation
+errors, and follows into the created record so deep editors get exercised. No
+per-site config — detection is structural, so it works on any app.
+
+It stays safe by reusing the same guardrails: it **never submits** a form with a
+credit-card field, an auth/login/signup form (would mutate your session), or one
+whose submit is destructive — and the network fence still blocks live payments.
+One free-text field per form carries a reflected-input canary, so created
+records still feed the XSS oracle. Bounded by `explore.forms.maxRecords`;
+`--dry-run` fills but never submits. Turn it off with `explore.forms.enabled: false`.
 
 ## Configuration
 

@@ -48,10 +48,44 @@
       </form>
     </fieldset>
 
+    <fieldset>
+      <legend>Create an item (buttonmash should complete this flow)</legend>
+      <button id="new-item" onclick="document.getElementById('item-name').focus()">New Item</button>
+      <form id="item-form" onsubmit="event.preventDefault(); createItem();">
+        <input id="item-name" name="itemName" type="text" required minlength="2" placeholder="Item name" />
+        <input id="item-email" name="contactEmail" type="email" required placeholder="Contact email" />
+        <select id="item-kind" name="kind" required>
+          <option value="">Choose…</option>
+          <option value="audio">Audio</option>
+          <option value="video">Video</option>
+        </select>
+        <textarea id="item-notes" name="notes" placeholder="Notes"></textarea>
+        <button type="submit">Create item</button>
+      </form>
+      <ul id="item-list"></ul>
+      <button class="danger" onclick="console.error('DELETED-EVERYTHING')">Delete all items</button>
+    </fieldset>
+
     <!-- A broken image: the server returns 404 for this path. -->
     <img src="/missing-asset.png" alt="a broken image" width="120" height="80" />
 
     <script>
+      let itemSeq = 0;
+      function createItem() {
+        const name = document.getElementById('item-name').value;
+        const email = document.getElementById('item-email').value;
+        const kind = document.getElementById('item-kind').value;
+        if (!name || !email || !kind) return; // required fields
+        itemSeq++;
+        const li = document.createElement('li');
+        li.className = 'item-row';
+        li.textContent = name + ' · ' + kind + ' · ' + email;
+        document.getElementById('item-list').appendChild(li);
+        // SPA-style navigation so buttonmash's nav capture + crawl follow in.
+        location.hash = '#/items/' + itemSeq;
+        document.getElementById('item-form').reset();
+      }
+
       function boom() {
         throw new Error('intentional uncaught error from Crash button');
       }

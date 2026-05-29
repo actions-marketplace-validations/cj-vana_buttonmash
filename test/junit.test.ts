@@ -22,6 +22,7 @@ function baseResult(findings: Finding[]): RunResult {
       actionsTaken: 10,
       pagesVisited: 1,
       statesDiscovered: 1,
+      recordsCreated: 0,
       findingsBySeverity: { critical: 0, high: findings.length, medium: 0, low: 0, info: 0 },
     },
     actions: [],
