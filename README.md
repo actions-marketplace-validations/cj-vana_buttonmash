@@ -77,8 +77,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with: { node-version: 20, cache: npm }
       - run: npm ci
       - run: npx playwright install --with-deps chromium
@@ -87,7 +87,7 @@ jobs:
         env:
           # storageState captured locally and stored as a secret (base64 or file)
           STORAGE_STATE: ${{ secrets.BUTTONMASH_STORAGE_STATE }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: ${{ !cancelled() }}
         with: { name: buttonmash-report, path: buttonmash-report/ }
 ```
