@@ -70,7 +70,7 @@ broke at or above your fail threshold.
 ## Use in CI (GitHub Actions)
 
 ```yaml
-name: chaos
+name: buttonmash
 on: [pull_request]
 jobs:
   buttonmash:
