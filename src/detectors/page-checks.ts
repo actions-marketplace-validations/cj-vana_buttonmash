@@ -46,6 +46,23 @@ function domCheck(): { blank: boolean; brokenImages: string[] } {
   return { blank, brokenImages: Array.from(new Set(broken)).slice(0, 20) };
 }
 
+/**
+ * True if position `idx` in `lowerHtml` is a context where a reflected value is
+ * NOT an XSS sink: inside an open tag (attribute value) or inside a raw-text /
+ * RCDATA element (textarea/title/script/style). Used to suppress the common
+ * false positive of a framework echoing typed input back into a control.
+ */
+export function isSafeReflectionContext(lowerHtml: string, idx: number): boolean {
+  // Inside a tag's attributes: the nearest '<' before idx isn't yet closed.
+  if (lowerHtml.lastIndexOf('<', idx) > lowerHtml.lastIndexOf('>', idx)) return true;
+  for (const tag of ['textarea', 'title', 'script', 'style']) {
+    const open = lowerHtml.lastIndexOf(`<${tag}`, idx);
+    const close = lowerHtml.lastIndexOf(`</${tag}`, idx);
+    if (open !== -1 && open > close) return true;
+  }
+  return false;
+}
+
 async function runAxe(deps: PageCheckDeps): Promise<void> {
   const { page, recorder } = deps;
   try {
@@ -149,9 +166,18 @@ export async function runPageChecks(deps: PageCheckDeps, newState: boolean): Pro
   }
 
   if (cfg.detectors.reflectedInput && state.pendingCanaries.size && html) {
+    const lowerHtml = html.toLowerCase();
     for (const canary of [...state.pendingCanaries]) {
       const idx = html.indexOf(canary);
       if (idx === -1) continue;
+      // Skip reflections in contexts that are NOT XSS sinks: inside an
+      // attribute/tag (e.g. a controlled <input value="…">) or inside a
+      // raw-text/RCDATA element (textarea/title/script/style). These are the
+      // dominant false-positive source — React echoing typed input.
+      if (isSafeReflectionContext(lowerHtml, idx)) {
+        state.pendingCanaries.delete(canary);
+        continue;
+      }
       const before = html.slice(Math.max(0, idx - 25), idx);
       const unencoded = /[<>"'][^<>]{0,20}$/.test(before);
       const rawCtx = html.slice(Math.max(0, idx - 40), idx + canary.length + 40);
