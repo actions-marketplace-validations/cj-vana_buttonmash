@@ -32,7 +32,7 @@ import { runPageChecks, type DetectorState } from '../detectors/page-checks';
 import { SignalRecorder } from '../detectors/recorder';
 import { attachSignalListeners, type CustomConsoleRule } from '../detectors/signals';
 import { DANGEROUS_PATH_RE } from '../guardrails/destructive';
-import { installFence } from '../guardrails/fence';
+import { installFence, isAllowedOrigin } from '../guardrails/fence';
 import { launchBrowser, createDeterministicContext } from '../session/browser';
 import { validateStorageState } from '../session/auth';
 import { executeAction, gatePlan, planAction, type ActionContext } from './actions';
@@ -91,6 +91,7 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
     pathRegexes.push(DANGEROUS_PATH_RE);
   }
   const blockedPathRe = combineRegexes(pathRegexes);
+  const allowedSet = new Set(cfg.guardrails.allowedOrigins);
 
   const browser: Browser = await launchBrowser(cfg.browser, cfg.headless);
   const { context, page } = await createDeterministicContext(browser, cfg, await ensureArtifactDir(outDir));
@@ -162,15 +163,20 @@ export async function runButtonmash(cfg: ResolvedConfig): Promise<RunButtonmashR
       break;
     }
 
-    const url = page.url();
-    recorder.setContext(i, url);
-    pagesVisited.add(normalizeUrl(url));
-
-    // Reset to start when too deep or at a dead end (bounded so it can't hang).
-    if (depth >= cfg.budget.maxDepth) {
+    // Recover to the start URL if we're too deep, or if a click left us
+    // off-origin / on a blank or browser-error page (e.g. an aborted external
+    // navigation). The fence already prevents off-origin content from loading;
+    // this keeps the monkey productively on-origin afterwards.
+    let url = page.url();
+    const offOrigin = !isAllowedOrigin(url, allowedSet);
+    const deadPage = url === 'about:blank' || url === '' || url.startsWith('chrome-error');
+    if (depth >= cfg.budget.maxDepth || offOrigin || deadPage) {
       await gotoStart();
       depth = 0;
+      url = page.url();
     }
+    recorder.setContext(i, url);
+    pagesVisited.add(normalizeUrl(url));
 
     // Brief settle so async content lands before we fingerprint the state.
     await withDeadline(page.waitForLoadState('domcontentloaded'), 3_000, 'settle').catch(() => {});
