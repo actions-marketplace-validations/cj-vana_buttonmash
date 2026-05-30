@@ -1,4 +1,4 @@
-name: 'buttonmash'
+name: 'ButtonMash Chaos Monkey'
 description: 'Run the buttonmash CI chaos monkey against a web app and fail the build on findings.'
 branding:
   icon: 'alert-triangle'
