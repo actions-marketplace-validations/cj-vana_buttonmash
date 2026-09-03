@@ -20,6 +20,16 @@ export interface DetectorState {
   seenBrokenImages: Set<string>;
 }
 
+/** Track a typed canary, evicting the oldest beyond a bound — a long run must
+ *  not rescan an ever-growing set against the full HTML on every new state. */
+export function addCanary(state: DetectorState, canary: string): void {
+  if (state.pendingCanaries.size >= 200) {
+    const oldest = state.pendingCanaries.values().next().value;
+    if (oldest !== undefined) state.pendingCanaries.delete(oldest);
+  }
+  state.pendingCanaries.add(canary);
+}
+
 export interface CustomTextRule {
   name: string;
   re: RegExp;
@@ -54,7 +64,16 @@ function domCheck(): { blank: boolean; brokenImages: string[]; overlay: string |
     if (img.complete && img.naturalWidth === 0 && src) broken.push(src);
   }
   const scrollH = document.documentElement?.scrollHeight ?? 0;
-  const blank = !!body && text.length < 3 && imgs.length === 0 && interactive === 0 && scrollH < 60;
+  // A rendered canvas/svg/video is content — a pure-canvas game has no text,
+  // no <img>, no interactive DOM nodes, and must not read as a white screen.
+  const media = document.querySelectorAll('canvas,svg,video').length;
+  const blank =
+    !!body &&
+    text.length < 3 &&
+    imgs.length === 0 &&
+    interactive === 0 &&
+    media === 0 &&
+    scrollH < 60;
 
   // Framework error overlays — error boundaries often don't re-throw to window,
   // so neither pageerror nor blank-screen fires. Match TIGHT signatures only.
@@ -74,7 +93,10 @@ function domCheck(): { blank: boolean; brokenImages: string[]; overlay: string |
       break;
     }
   }
-  if (!overlay && /Application error: a client-side exception|Unexpected Application Error/i.test(text)) {
+  if (
+    !overlay &&
+    /Application error: a client-side exception|Unexpected Application Error/i.test(text)
+  ) {
     overlay = 'framework error message';
   }
   return { blank, brokenImages: Array.from(new Set(broken)).slice(0, 20), overlay };
@@ -165,7 +187,8 @@ export async function runPageChecks(deps: PageCheckDeps, newState: boolean): Pro
   if (deps.customUrl.length) {
     const u = page.url();
     for (const rule of deps.customUrl) {
-      if (rule.re.test(u)) recorder.add('custom', `${rule.name}: ${u}`, { severity: rule.severity });
+      if (rule.re.test(u))
+        recorder.add('custom', `${rule.name}: ${u}`, { severity: rule.severity });
     }
   }
 

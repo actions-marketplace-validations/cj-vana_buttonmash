@@ -34,7 +34,9 @@ describe('hash', () => {
     // same structure, different visible text → same structural fp (no churn)
     expect(structuralFingerprint({ ...a })).toBe(structuralFingerprint({ ...a }));
     // but a different position is still a different control
-    expect(structuralFingerprint(a)).not.toBe(structuralFingerprint({ ...a, path: 'body:0>span:3' }));
+    expect(structuralFingerprint(a)).not.toBe(
+      structuralFingerprint({ ...a, path: 'body:0>span:3' }),
+    );
     // and elementFingerprint (which DOES include name) differs on text
     expect(elementFingerprint({ ...a, name: '3 minutes ago' })).not.toBe(
       elementFingerprint({ ...a, name: '4 minutes ago' }),
@@ -51,5 +53,80 @@ describe('hash', () => {
     const a = findingDedupKey('js-error', 'https://x.test/p', 'Error at app.js:100:5');
     const b = findingDedupKey('js-error', 'https://x.test/p', 'Error at app.js:288:91');
     expect(a).toBe(b);
+  });
+
+  it('findingDedupKey collapses stack URLs that differ only by SPA hash state', () => {
+    const stack = (frag: string) =>
+      `intentional error\nError: intentional error\n    at boom (https://x.test/${frag}:110:15)`;
+    const a = findingDedupKey('js-error', 'https://x.test/', stack(''));
+    const b = findingDedupKey(
+      'js-error',
+      'https://x.test/#shadow-clicked',
+      stack('#shadow-clicked'),
+    );
+    expect(a).toBe(b);
+  });
+
+  it('findingDedupKey collapses stack URLs that differ only by cache-buster query', () => {
+    const a = findingDedupKey(
+      'js-error',
+      'https://x.test/',
+      'at fn (https://cdn.test/app.js?v=111:1:2)',
+    );
+    const b = findingDedupKey(
+      'js-error',
+      'https://x.test/',
+      'at fn (https://cdn.test/app.js?v=222:3:4)',
+    );
+    expect(a).toBe(b);
+  });
+
+  it('findingDedupKey keeps genuinely different resources distinct', () => {
+    const a = findingDedupKey('http-4xx', 'https://x.test/', '404 https://x.test/a.png');
+    const b = findingDedupKey('http-4xx', 'https://x.test/', '404 https://x.test/b.png');
+    expect(a).not.toBe(b);
+  });
+});
+
+describe('normalizeUrl param precision', () => {
+  it('keeps whole params that merely start with a volatile name', () => {
+    expect(normalizeUrl('https://x.test/items?view=list')).toBe('https://x.test/items?view=list');
+    expect(normalizeUrl('https://x.test/items?version=2')).toBe('https://x.test/items?version=2');
+    expect(normalizeUrl('https://x.test/items?side=left')).toBe('https://x.test/items?side=left');
+  });
+
+  it('still strips exact volatile params and prefix families', () => {
+    expect(normalizeUrl('https://x.test/p?v=123&utm_campaign=x&_t=9&a=1')).toBe(
+      'https://x.test/p?a=1',
+    );
+    expect(normalizeUrl('https://x.test/p?session=abc&token=zzz')).toBe('https://x.test/p');
+  });
+});
+
+describe('hash-router routes', () => {
+  it('normalizeUrl keeps #/ and #!/ routes but drops plain anchors', () => {
+    expect(normalizeUrl('https://x.test/app#/items/3')).toBe('https://x.test/app#/items/3');
+    expect(normalizeUrl('https://x.test/app#!/items/3')).toBe('https://x.test/app#!/items/3');
+    expect(normalizeUrl('https://x.test/app#section')).toBe('https://x.test/app');
+  });
+
+  it('distinct hash routes are distinct pages for state coverage', () => {
+    expect(stateFingerprint('https://x.test/#/a', ['f'])).not.toBe(
+      stateFingerprint('https://x.test/#/b', ['f']),
+    );
+  });
+
+  it('routePath folds a hash route into the path for guards', async () => {
+    const { routePath } = await import('../src/core/hash');
+    expect(routePath(new URL('https://x.test/app#/account/delete'))).toBe('/app/account/delete');
+    expect(routePath(new URL('https://x.test/app#top'))).toBe('/app');
+    expect(routePath(new URL('https://x.test/login'))).toBe('/login');
+  });
+
+  it('stack URLs still dedup across hash-route state', () => {
+    const stack = (frag: string) => `boom\n    at fn (https://x.test/${frag}:10:5)`;
+    expect(findingDedupKey('js-error', 'https://x.test/', stack(''))).toBe(
+      findingDedupKey('js-error', 'https://x.test/', stack('#/items/9')),
+    );
   });
 });

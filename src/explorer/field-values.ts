@@ -38,7 +38,9 @@ const CONFIRM_RE = /confirm|verify|again|repeat|re-?enter/i;
  *  form so a confirm-password matches the password. */
 function fieldRng(runId: string, field: FieldDescriptor, attempt: number): Rng {
   const family =
-    field.kind === 'password' ? `${field.formKey}:pw` : `${field.formKey}:${field.name || field.selector}`;
+    field.kind === 'password'
+      ? `${field.formKey}:pw`
+      : `${field.formKey}:${field.name || field.selector}`;
   return new Rng(`${runId}:${family}:${attempt}`);
 }
 
@@ -52,54 +54,83 @@ function clamp(s: string, field: FieldDescriptor, r: Rng): string {
 
 function num(field: FieldDescriptor, r: Rng): string {
   const min = field.min !== undefined && field.min !== '' ? Number(field.min) : 1;
-  const max = field.max !== undefined && field.max !== '' ? Number(field.max) : Math.max(min + 9, 10);
+  const max =
+    field.max !== undefined && field.max !== '' ? Number(field.max) : Math.max(min + 9, 10);
   const step = field.step && field.step !== 'any' ? Number(field.step) : 1;
   const lo = Number.isFinite(min) ? min : 1;
   const hi = Number.isFinite(max) && max >= lo ? max : lo + 9;
   let v = r.intBetween(Math.ceil(lo), Math.floor(hi));
-  if (Number.isFinite(step) && step > 0) v = lo + Math.round((v - lo) / step) * step;
+  if (Number.isFinite(step) && step > 0) {
+    v = lo + Math.round((v - lo) / step) * step;
+    // Snapping can overshoot the range (min 0 / max 10 / step 4 → 12), and
+    // fractional steps leave float artifacts — both fail native validation
+    // identically on every retry.
+    if (v > hi) v = v - step >= lo ? v - step : lo;
+    if (v < lo) v = lo;
+    v = Number(v.toFixed(6));
+  }
   return String(v);
 }
 
-/** Seed-derived date (NOT wall-clock) within [min,max] if given. */
+/** Seed-derived date/time (NOT wall-clock) within [min,max] if given, in the
+ *  exact value format the input type requires. */
 function dateValue(field: FieldDescriptor, r: Rng): string {
   // Base epoch day for 2026-01-01, plus a seeded offset within a 2-year window.
   const baseDay = Math.floor(Date.parse('2026-01-01T00:00:00Z') / 86_400_000);
   let day = baseDay + r.intBetween(0, 729);
-  const toIso = (d: number) => new Date(d * 86_400_000).toISOString();
   const minDay = field.min ? Math.floor(Date.parse(field.min) / 86_400_000) : null;
   const maxDay = field.max ? Math.floor(Date.parse(field.max) / 86_400_000) : null;
   if (minDay && Number.isFinite(minDay) && day < minDay) day = minDay;
   if (maxDay && Number.isFinite(maxDay) && day > maxDay) day = maxDay;
-  const iso = toIso(day);
+  const iso = new Date(day * 86_400_000).toISOString();
+  const hhmm = `${String(r.intBetween(8, 18)).padStart(2, '0')}:${String(r.intBetween(0, 59)).padStart(2, '0')}`;
   switch (field.kind) {
-    case 'date':
-      return iso.slice(0, 10);
+    case 'datetime-local':
+      return `${iso.slice(0, 10)}T${hhmm}`;
+    case 'month':
+      return iso.slice(0, 7);
+    case 'week':
+      return `${iso.slice(0, 4)}-W${String(r.intBetween(1, 52)).padStart(2, '0')}`;
+    case 'time':
+      return hhmm;
     default:
-      // datetime-local style for any other date-ish text input
-      return iso.slice(0, 16);
+      return iso.slice(0, 10); // date
   }
 }
 
-function semanticText(field: FieldDescriptor, r: Rng, salt: string): { value: string; canary?: string } {
-  const hay = `${field.name} ${field.label} ${field.placeholder} ${field.autocomplete ?? ''}`.toLowerCase();
+function semanticText(
+  field: FieldDescriptor,
+  r: Rng,
+  salt: string,
+): { value: string; canary?: string } {
+  const hay =
+    `${field.name} ${field.label} ${field.placeholder} ${field.autocomplete ?? ''}`.toLowerCase();
   const has = (re: RegExp) => re.test(hay);
   if (has(/first.?name|given/)) return { value: pick(r, FIRST) };
   if (has(/last.?name|surname|family/)) return { value: pick(r, LAST) };
-  if (has(/full.?name|^name$|\bname\b|display/)) return { value: `${pick(r, FIRST)} ${pick(r, LAST)}` };
-  if (has(/user.?name|handle/)) return { value: `${pick(r, FIRST).toLowerCase()}${salt.slice(0, 4)}` };
+  if (has(/full.?name|^name$|\bname\b|display/))
+    return { value: `${pick(r, FIRST)} ${pick(r, LAST)}` };
+  if (has(/user.?name|handle/))
+    return { value: `${pick(r, FIRST).toLowerCase()}${salt.slice(0, 4)}` };
   if (has(/e-?mail/)) return { value: `${pick(r, WORDS)}.${salt.slice(0, 6)}@example.com` };
-  if (has(/phone|mobile|tel/)) return { value: `512${salt.replace(/\D/g, '').padEnd(7, '0').slice(0, 7)}` };
+  if (has(/phone|mobile|tel/))
+    return { value: `512${salt.replace(/\D/g, '').padEnd(7, '0').slice(0, 7)}` };
   if (has(/compan|organi[sz]ation|business|client/)) return { value: pick(r, COMPANIES) };
   if (has(/city|town/)) return { value: pick(r, CITIES) };
   if (has(/state|province|region/)) return { value: 'TX' };
-  if (has(/zip|postal/)) return { value: `78${salt.replace(/\D/g, '').padEnd(3, '0').slice(0, 3)}` };
+  if (has(/zip|postal/))
+    return { value: `78${salt.replace(/\D/g, '').padEnd(3, '0').slice(0, 3)}` };
   if (has(/address|street/)) return { value: `${r.intBetween(100, 9999)} ${pick(r, STREETS)}` };
   if (has(/url|website|link/)) return { value: `https://example.com/${pick(r, WORDS)}` };
-  if (has(/title|subject|event|project|show/)) return { value: `${pick(r, WORDS)} ${pick(r, ['2026', 'Live', 'Tour'])}` };
+  if (has(/title|subject|event|project|show/))
+    return { value: `${pick(r, WORDS)} ${pick(r, ['2026', 'Live', 'Tour'])}` };
   if (has(/search|query|filter/)) return { value: pick(r, WORDS) };
   // Free-text / description / notes — embed a canary so reflected-XSS still fires.
-  if (field.kind === 'textarea' || field.kind === 'contenteditable' || has(/desc|note|comment|message|bio|about/)) {
+  if (
+    field.kind === 'textarea' ||
+    field.kind === 'contenteditable' ||
+    has(/desc|note|comment|message|bio|about/)
+  ) {
     const canary = `cnry${salt.slice(0, 8)}zz`;
     return { value: `${pick(r, WORDS)} seed ${canary}`, canary };
   }
@@ -137,6 +168,10 @@ export function valueForField(runId: string, field: FieldDescriptor, attempt = 0
     case 'range':
       return { value: num(field, r) };
     case 'date':
+    case 'datetime-local':
+    case 'month':
+    case 'week':
+    case 'time':
       return { value: dateValue(field, r) };
     case 'color':
       return { value: `#${salt.slice(0, 6)}` };
@@ -164,7 +199,13 @@ export function valueForField(runId: string, field: FieldDescriptor, attempt = 0
       let value = clamp(sem.value, field, r);
       // Honor an explicit pattern if the semantic value violates it.
       if (!matchesPattern(value, field.pattern)) {
-        value = clamp(/\\d|\[0-9\]/.test(field.pattern ?? '') ? String(r.intBetween(10000, 99999)) : `seed${salt.slice(0, 6)}`, field, r);
+        value = clamp(
+          /\\d|\[0-9\]/.test(field.pattern ?? '')
+            ? String(r.intBetween(10000, 99999))
+            : `seed${salt.slice(0, 6)}`,
+          field,
+          r,
+        );
       }
       return { value, canary: sem.canary };
     }

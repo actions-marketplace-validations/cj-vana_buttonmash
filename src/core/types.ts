@@ -88,6 +88,10 @@ export interface FieldDescriptor {
     | 'email'
     | 'number'
     | 'date'
+    | 'datetime-local'
+    | 'month'
+    | 'week'
+    | 'time'
     | 'tel'
     | 'url'
     | 'password'
@@ -174,6 +178,7 @@ export type SignalKind =
   | 'billing-live'
   | 'form-validation'
   | 'session-lost'
+  | 'guardrail'
   | 'custom'
   | 'driver';
 
@@ -228,6 +233,30 @@ export interface Finding {
   reproSteps: LoggedAction[];
   firstSeenStep: number;
   artifacts: Artifact[];
+  /** Present when the run was compared with a baseline report. */
+  baselineState?: 'new' | 'updated' | 'existing';
+}
+
+export interface BaselineFindingSummary {
+  dedupKey: string;
+  severity: Severity;
+  category: string;
+  title: string;
+  location: Finding['location'];
+}
+
+export interface BaselineComparison {
+  /** Baseline path supplied by the user. */
+  source: string;
+  /** True when both runs used an equivalent exploration configuration and completed. */
+  comparable: boolean;
+  newFindings: number;
+  updatedFindings: number;
+  existingFindings: number;
+  /** Comparable-baseline findings absent from this completed run. */
+  resolvedFindings: BaselineFindingSummary[];
+  /** Absent findings whose resolution cannot be claimed because runs differ. */
+  notObservedFindings: BaselineFindingSummary[];
 }
 
 export interface RunStats {
@@ -253,16 +282,22 @@ export interface RunResult {
     viewport: { width: number; height: number };
     exitCode: number;
     dryRun: boolean;
+    /** Whether the configured exploration completed without an abnormal stop. */
+    complete?: boolean;
   };
   config: {
     seed: string;
     maxActions: number;
     maxDurationMs: number;
     failOn: Severity;
+    /** When true, only new findings at/above `failOn` fail the run. */
+    failOnNew?: boolean;
   };
   stats: RunStats;
   actions: LoggedAction[];
   findings: Finding[];
+  /** Delta against a previous results.json, when configured. */
+  baseline?: BaselineComparison;
   /** Full resolved config used for this run (secrets redacted) — for faithful
    *  cross-machine replay. */
   resolvedConfig?: Record<string, unknown>;
@@ -272,8 +307,8 @@ export interface RunResult {
 export const EXIT = {
   /** No findings at or above the fail threshold. */
   CLEAN: 0,
-  /** Findings at or above the fail threshold — the build-failing signal. */
+  /** Findings at/above the fail threshold or an incomplete safety/target run. */
   FINDINGS: 1,
-  /** The tool itself errored (bad config, usage, internal failure). */
+  /** The tool errored or was interrupted before it could complete. */
   ERROR: 2,
 } as const;

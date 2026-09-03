@@ -4,18 +4,30 @@
 [![npm](https://img.shields.io/npm/v/buttonmash.svg)](https://www.npmjs.com/package/buttonmash)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
+![One buttonmash run: the CLI starts, the monkey mashes the demo app, the build fails red](https://raw.githubusercontent.com/cj-vana/buttonmash/main/docs/demo.gif)
+
+**[▶ See a real report](https://cj-vana.github.io/buttonmash/)**, the
+self-contained `report.html` from a run against the bundled
+[buggy demo app](./examples/buggy-app/), hosted as-is. Or read the
+**[field test](https://github.com/cj-vana/buttonmash/blob/main/docs/case-study.md)**:
+we pointed it at Excalidraw, JSON Crack, and TodoMVC. It found a real bug in
+one, passed another clean, and needed two minutes of tuning to get there.
+
 **A CI chaos monkey for web apps.** Point it at your site and it **crawls every
-page on its own** — discovering links and in-app (SPA) navigations as it goes —
+page on its own**, discovering links and in-app (SPA) navigations as it goes,
 then on each page finds every button/link/input and mashes them: clicking,
 double-clicking, typing random keystrokes, selecting, scrolling, resizing,
-navigating. It even **completes create-flows** — filling forms with valid data
-and submitting them — so empty apps populate themselves and deep editors get
+navigating. It even **completes create-flows**, filling forms with valid data
+and submitting them, so empty apps populate themselves and deep editors get
 exercised. When something breaks (an uncaught error, a 500, a crash, a blank
 screen, a broken image…) it writes a report and **fails your build**.
 
 It's deterministic (seeded, so any failure replays), bounded (action/time
 budgets), and **safe by default**: it stays on your origin, skips destructive
-controls, refuses to run against live payment keys, and redacts secrets.
+controls, refuses to run against live payment keys, and redacts secrets. And you
+don't have to fix every existing bug before the gate is useful:
+[baseline them](#adopting-on-an-app-that-already-has-bugs) and only **new**
+breakage fails the build.
 
 ```bash
 npx buttonmash run https://staging.example.com
@@ -24,21 +36,45 @@ npx buttonmash run https://staging.example.com
 > [!WARNING]
 > **Point this at a test/staging environment, never production.** A random
 > clicker mutates state. Use **Stripe/PayPal test mode** and test cards. buttonmash
-> tries hard to avoid damage (see [Safety](#-safety)), but those are guardrails,
-> not guarantees — the real safety control is running against a disposable
+> tries hard to avoid damage (see [Safety](#safety)), but those are guardrails,
+> not guarantees. The real safety control is running against a disposable
 > environment with test-mode billing.
-
----
 
 ## Why
 
 Existing in-page monkeys (gremlins.js and friends) inject synthetic events and
-**never actually fail your CI** — they just log to the console. buttonmash flips
+**never actually fail your CI**; they just log to the console. buttonmash flips
 that around: it drives the page from the **harness** side with Playwright, so it
 owns the verdict and the exit code. It also enumerates real elements (so it hits
 buttons below the fold, unlike coordinate-based clickers), dispatches **trusted**
 input, and deduplicates findings into an actionable report with a reproducible
 seed.
+
+## buttonmash vs. gremlins.js
+
+[gremlins.js](https://github.com/marmelab/gremlins.js) pioneered monkey testing
+on the web, and it is still the fastest way to set chaos loose on a page you
+don't own the infrastructure for: it runs from a script tag or bookmarklet in
+any browser with zero setup. It is also dormant (last release June 2022, last
+commit March 2023). buttonmash is built for a different job: running in CI and
+deciding whether the build passes.
+
+|  | gremlins.js | buttonmash |
+| --- | --- | --- |
+| Runs | inside the page: script tag, bookmarklet, or injected into Cypress/Playwright | from a Playwright harness that owns the browser |
+| CI verdict | logs errors to the console; the gizmo mogwai stops the horde after 10 errors | exits `1` at your severity threshold and fails the build |
+| Targeting | coordinate-based clicks and touches anywhere on the viewport | enumerates real buttons/links/inputs, including below the fold, in open shadow DOM, and in same-origin iframes |
+| Coverage | the page you loaded it on | crawls the whole origin: links, SPA routes, hash routers |
+| Forms | types random values | completes create-flows with valid, deterministic values and submits only safe forms |
+| Safety | none built in; anything on the page can be clicked | skips destructive controls, stays on origin, refuses live billing, dismisses confirms |
+| Reproducibility | seedable RNG (`gremlins.Chance`) | one seed drives everything, including in-page `Math.random`, printed and embedded in every report |
+| Output | console log | deduplicated findings with repro traces in JSON, JUnit, HTML, and SARIF, plus baselines |
+| Setup | none | Node 20+ and a Playwright browser download |
+
+If you want to poke a page interactively right now, gremlins.js is still great.
+If you want a monkey that runs on every pull request and blocks the ones that
+break things, that's buttonmash. They also stack: gremlins in the browser while
+developing, buttonmash as the gate in CI.
 
 ## Install
 
@@ -52,23 +88,33 @@ Requires Node 20+.
 ## Quickstart
 
 ```bash
-# 1. (optional) capture an authenticated session — opens a browser, you log in
+# 1. (optional) capture an authenticated session (opens a browser, you log in)
 npx buttonmash auth https://staging.example.com/login
 #    → saves cookies/localStorage to playwright/.auth/user.json
 
 # 2. scaffold a config (optional)
 npx buttonmash init
 
-# 3. run it
+# 3. preflight the environment
+npx buttonmash doctor https://staging.example.com --auth playwright/.auth/user.json
+#    → verifies browser, target, auth, origin fence, billing mode, and baseline
+
+# 4. run it
 npx buttonmash run https://staging.example.com --auth playwright/.auth/user.json
 
-# 4. reproduce a failure exactly (the seed is printed on every run)
+# 5. reproduce a failure exactly (the seed is printed on every run)
 npx buttonmash run https://staging.example.com --seed <seed-from-report>
 ```
 
 When it finishes you get a `buttonmash-report/` folder with `report.html`
 (self-contained), `results.json`, and `junit.xml`. Exit code is `1` if anything
-broke at or above your fail threshold.
+broke at or above your fail threshold or a safety/target condition stopped the
+run; exit code `2` means a tool error or interruption left partial results.
+
+`buttonmash doctor` is a bounded preflight: it launches the configured browser,
+loads the target, verifies saved or scripted authentication, checks the final
+origin, scans for live billing evidence, and validates a configured baseline.
+It does not enter the chaos/exploration loop.
 
 ## Use in CI (GitHub Actions)
 
@@ -85,7 +131,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       # start your app under test here (e.g. npm ci && npm run start &) and wait for it…
-      - uses: cj-vana/buttonmash@v0.1.8
+      - uses: cj-vana/buttonmash@v0.2.0
         with:
           target: http://localhost:3000
           args: --seed ci --max-actions 800
@@ -119,13 +165,39 @@ jobs:
 buttonmash auto-detects GitHub Actions and emits inline annotations plus a job-summary
 table. The non-zero exit code fails the job.
 
+## Adopting on an app that already has bugs
+
+The first sweep of a real app usually finds things, some of them years old.
+That shouldn't mean fixing everything before the gate earns its keep. Run once,
+keep the `results.json`, and pass it back as a baseline: known findings stay
+visible in every report, but only **new** breakage fails the build.
+
+```bash
+npx buttonmash run https://staging.example.com \
+  --baseline previous-results.json \
+  --fail-on-new
+```
+
+JSON, HTML, terminal, and GitHub summaries classify current findings as **new**,
+severity-**updated**, or **existing**. An absent finding is called **resolved**
+only when both runs completed with the same exploration configuration; otherwise
+it is conservatively listed as **not observed**. JUnit failure counts and SARIF
+baseline states follow the same new-finding policy.
+`--fail-on-new` requires a baseline; without it, the normal severity-based exit
+behavior is unchanged.
+
+For authenticated runs or runs with custom headers, pass a stable non-secret
+`baseline.identity` / `--baseline-id` (for example `staging-admin`) to assert
+that both runs exercised the same user, tenant, and feature-flag context.
+Without that explicit identity, absent findings are never claimed as resolved.
+
 ## Crawling the whole site
 
 By default buttonmash **auto-crawls**: starting from your target, it discovers
 every same-origin `<a href>` link *and* every client-side route the app
 navigates to via buttons/`navigate()` (it hooks `pushState`/`popstate`), queues
 them, and works through them breadth-first. When the link frontier runs dry it
-returns to the start and keeps clicking — so button-driven SPA shells (where the
+returns to the start and keeps clicking, so button-driven SPA shells (where the
 nav isn't `<a href>`) still get fully covered. One run, the whole reachable site:
 
 ```bash
@@ -134,14 +206,19 @@ npx buttonmash run https://staging.example.com   # crawls everything it can reac
 
 Controls:
 
-- `budget.maxPages` — cap on distinct pages per run (default 100), so CI stays bounded.
-- `routes` — optional **hints**: pages nothing links to (e.g. a deep editor URL).
-  They seed the frontier; the crawl finds the rest. Also available as `--route <url...>`.
-- `explore.crawl: false` — disable auto-crawl and only sweep `target` + `routes`.
+- `budget.maxPages` caps distinct pages per run (default 100), so CI stays bounded.
+- `routes` seeds the frontier with hints: pages nothing links to (e.g. a deep
+  editor URL). The crawl finds the rest. Also available as `--route <url...>`.
+- `explore.crawl: false` disables auto-crawl and only sweeps `target` + `routes`.
 
 Dangerous paths (logout/delete/cancel) and off-origin URLs are never enqueued.
 
-Discovery also reaches **inside open shadow DOM** (web-component design systems —
+Hash-router SPAs are first-class: `#/route` and `#!/route` fragments count as
+distinct pages in the frontier and stats (plain `#anchor` fragments don't), and
+path guards like `blockedPathPatterns` apply to the hash route too. A
+`#/account/delete` link is guarded exactly like `/account/delete`.
+
+Discovery also reaches **inside open shadow DOM** (web-component design systems like
 Salesforce LWC, Ionic, Shoelace/Lit/Material Web) and **same-origin iframes**
 (embedded editors, wizards), so component-based apps aren't invisible to it.
 
@@ -153,25 +230,25 @@ with `guardrails.includePaths` / `excludePaths`.
 
 ## Self-populating (form completion)
 
-A fresh app is mostly empty lists — so buttonmash **creates its own data**. When
+A fresh app is mostly empty lists, so buttonmash **creates its own data**. When
 it finds a fillable form (or opens a "New/Add/Create" flow), it fills every
-required field — and a fraction of optional ones — with **valid, deterministic**
+required field (and a fraction of optional ones) with **valid, deterministic**
 values inferred from each field's type/label/pattern/min-max/options (real
 emails, in-range numbers, seeded dates, a chosen `<select>` option, mirrored
 password-confirm), clicks the form's **safe** submit, repairs on validation
 errors, and follows into the created record so deep editors get exercised. No
-per-site config — detection is structural, so it works on any app.
+per-site config; detection is structural, so it works on any app.
 
 It stays safe by reusing the same guardrails: it **never submits** a form with a
 credit-card field, an auth/login/signup form (would mutate your session), or one
-whose submit is destructive — and the network fence still blocks live payments.
+whose submit is destructive, and the network fence still blocks live payments.
 One free-text field per form carries a reflected-input canary, so created
 records still feed the XSS oracle. Bounded by `explore.forms.maxRecords`;
 `--dry-run` fills but never submits. Turn it off with `explore.forms.enabled: false`.
 
 ## Configuration
 
-Create `buttonmash.config.ts` (or `.js`/`.json`) — `buttonmash init` writes a
+Create `buttonmash.config.ts` (or `.js`/`.json`); `buttonmash init` writes a
 starter. CLI flags override the file.
 
 ```ts
@@ -223,6 +300,10 @@ export default defineConfig({
   },
 
   failOn: 'high',                   // critical | high | medium | low | info
+
+  // Compare with a previous results.json. With failOnNew enabled, known
+  // findings stay visible but only regressions fail the build.
+  // baseline: { path: 'previous-results.json', failOnNew: true, identity: 'staging-admin' },
 });
 ```
 
@@ -234,6 +315,9 @@ export default defineConfig({
 | `--route <url...>` | Extra route hints to sweep in the same run (crawl finds the rest) |
 | `--max-actions <n>` / `--max-duration <sec>` | Budget |
 | `--fail-on <severity>` | Min severity that fails the build (default `high`) |
+| `--baseline <results.json>` | Classify findings as new, existing, or resolved |
+| `--baseline-id <id>` | Assert the same user/tenant/header context across runs |
+| `--fail-on-new` | Fail only for new findings at/above the threshold |
 | `--dry-run` | Read-only: explore without submitting or mutating |
 | `--auth <path>` | Playwright storageState JSON |
 | `--billing <refuse\|warn\|off>` | Live-payment guard |
@@ -246,25 +330,25 @@ export default defineConfig({
 - **Uncaught JS errors** and `console.error`
 - **HTTP 4xx/5xx** responses and failed requests
 - **Renderer crashes** and **hangs / unresponsive pages** (wall-clock watchdog)
-- **Framework error overlays** (Next.js/Vite/React, "Application error") — caught even when an error boundary swallows the throw
+- **Framework error overlays** (Next.js/Vite/React, "Application error"), caught even when an error boundary swallows the throw
 - **Blank screens** ("white screen of death") and **broken images**
-- **Reflected input** — a safe canary probe that flags possible XSS sinks (never injects executing payloads)
+- **Reflected input**, a safe canary probe that flags possible XSS sinks (never injects executing payloads)
 - **Client-exposed secrets** (Stripe/AWS/GitHub/Slack/… keys, gitleaks-derived)
 - **Accessibility** violations via axe-core (opt-in)
-- **Session loss** — if an authed run gets redirected to a login page mid-run (expired session), it flags it and re-authenticates when a login script is configured
-- **Custom signals** — your own console/DOM/url regex rules
+- **Session loss**, flagged when an authed run gets redirected to a login page mid-run (expired session); with a login script configured it re-authenticates and continues
+- Your own **custom signals** (console/DOM/url regex rules)
 
 Findings are **deduplicated** (the same bug firing 500× becomes one finding with
 `count: 500`) and carry a minimal repro trace. To stay usable on real apps,
 buttonmash ships a **default allowlist** of benign console noise (ResizeObserver
 loops, React dev warnings, HMR…) and **downgrades third-party `console.error`**
-(analytics/chat/payment SDKs) so they don't redden your build — first-party
+(analytics/chat/payment SDKs) so they don't redden your build; first-party
 errors stay high (`detectors.thirdPartyConsole: true` to opt in). State dedup is
 **structural** by default, so live counters/clocks don't explode the state space
 on dynamic apps. And if CI cancels or times out mid-run, a **partial report is
 still written** (SIGTERM-safe) so you never lose the findings collected so far.
 
-## 🛡 Safety
+## Safety
 
 buttonmash is built to break things without breaking *you*:
 
@@ -282,23 +366,26 @@ buttonmash is built to break things without breaking *you*:
 - **Dismiss, never confirm.** Native `confirm()`/`beforeunload` dialogs are
   always dismissed, so the monkey can't click "Yes, delete".
 - **Dry-run mode.** `--dry-run` explores read-only: hover, scroll, navigate
-  links — no form submits, typing, or mutations.
+  links, with no form submits, typing, or mutations.
 
 ## Reports & exit codes
 
 Every run writes `results.json` (the source of truth). Optionally `junit.xml`
-(for CI test rendering), a self-contained `report.html`, and `results.sarif`
-(for GitHub code-scanning). Exit codes follow the pytest/ESLint convention:
+(for CI test rendering), a self-contained `report.html`
+([live example](https://cj-vana.github.io/buttonmash/)), and `results.sarif`
+(for GitHub code-scanning). On GitHub Actions it additionally emits inline
+`::error` annotations for the top findings and a markdown job summary. No
+setup needed. Exit codes follow the pytest/ESLint convention:
 
 | Code | Meaning |
 |---|---|
 | `0` | No findings at/above the fail threshold |
-| `1` | Findings at/above the threshold — **the build-failing signal** |
-| `2` | buttonmash itself errored (bad config/usage/internal) |
+| `1` | Findings at/above the threshold, or a safety/target stop (**the build-failing signal**) |
+| `2` | Tool/config error or interruption (partial run) |
 
 ## Reproducibility
 
-Every choice — which element, which action, which input — flows through a single
+Every choice (which element, which action, which input) flows through a single
 seeded PRNG, and the in-page `Math.random` is seeded identically. The seed is
 printed at startup and embedded in every report, and replaying it makes the
 monkey take the **same decisions**.
@@ -334,10 +421,12 @@ launch (Playwright) → auth (storageState) → fence (origin/dialogs/popups)
 
 ## Limitations
 
-- Doesn't pierce shadow DOM or cross-origin iframes (payment iframes are
-  intentionally left alone).
+- Reaches open shadow roots and same-origin iframes, but not **closed** shadow
+  roots or **cross-origin** iframes (payment iframes are intentionally left
+  alone).
 - Pure random/coverage exploration can under-explore deep multi-step flows.
-- Heuristic destructive detection is English-leaning + a few languages; extend
+- Heuristic destructive detection covers English, Spanish, German, French,
+  Japanese, Chinese, Korean, Russian, and Arabic verbs; extend
   `destructive.extraVerbs` for your UI. **Sandbox + test mode is the real safety
   net.**
 
@@ -352,6 +441,13 @@ npm run typecheck && npm run lint
 
 The `examples/buggy-app/` is a deliberately broken page used to dogfood the tool
 in CI.
+
+## Related
+
+[unslop-ci](https://github.com/cj-vana/unslop-ci) is buttonmash's sibling: a
+diff-aware CI gate that scans only the lines a PR adds for the tells that make
+code, prose, and UI read as AI-generated. buttonmash tests what the running
+app does; unslop-ci gates what the diff says.
 
 ## License
 

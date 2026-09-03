@@ -23,7 +23,9 @@ describe('valueForField', () => {
   });
 
   it('produces a valid email for email fields', () => {
-    expect(valueForField('run', field({ kind: 'email', name: 'email' })).value).toMatch(/^[^@\s]+@[^@\s]+$/);
+    expect(valueForField('run', field({ kind: 'email', name: 'email' })).value).toMatch(
+      /^[^@\s]+@[^@\s]+$/,
+    );
   });
 
   it('clamps numbers to [min,max]', () => {
@@ -33,7 +35,10 @@ describe('valueForField', () => {
   });
 
   it('respects maxLength', () => {
-    const v = valueForField('run', field({ kind: 'text', name: 'description', maxLength: 6 })).value;
+    const v = valueForField(
+      'run',
+      field({ kind: 'text', name: 'description', maxLength: 6 }),
+    ).value;
     expect(v.length).toBeLessThanOrEqual(6);
   });
 
@@ -54,7 +59,12 @@ describe('valueForField', () => {
 
   it('mirrors all password fields in a form to one value (confirm matches)', () => {
     const pw = field({ kind: 'password', name: 'password', formKey: 'F' });
-    const confirm = field({ kind: 'password', name: 'confirmPassword', formKey: 'F', selector: '#c' });
+    const confirm = field({
+      kind: 'password',
+      name: 'confirmPassword',
+      formKey: 'F',
+      selector: '#c',
+    });
     expect(valueForField('run', pw).value).toBe(valueForField('run', confirm).value);
   });
 
@@ -69,5 +79,37 @@ describe('valueForField', () => {
     const r = valueForField('run', field({ kind: 'textarea', name: 'notes' }));
     expect(r.canary).toMatch(/^cnry[0-9a-f]{8}zz$/);
     expect(r.value).toContain(r.canary!);
+  });
+});
+
+describe('date-family formats', () => {
+  const base = {
+    selector: 'input',
+    fp: 'x',
+    name: 'when',
+    label: '',
+    placeholder: '',
+    required: true,
+    formKey: 'f',
+  } as const;
+
+  it('emits the exact value format each input type requires', () => {
+    expect(valueForField('run', { ...base, kind: 'date' }).value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(valueForField('run', { ...base, kind: 'datetime-local' }).value).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/,
+    );
+    expect(valueForField('run', { ...base, kind: 'month' }).value).toMatch(/^\d{4}-\d{2}$/);
+    expect(valueForField('run', { ...base, kind: 'week' }).value).toMatch(/^\d{4}-W\d{2}$/);
+    expect(valueForField('run', { ...base, kind: 'time' }).value).toMatch(/^\d{2}:\d{2}$/);
+  });
+
+  it('number step snapping never overshoots max', () => {
+    for (let i = 0; i < 20; i++) {
+      const v = Number(
+        valueForField(`run${i}`, { ...base, kind: 'number', min: '0', max: '10', step: '4' }).value,
+      );
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(10);
+    }
   });
 });

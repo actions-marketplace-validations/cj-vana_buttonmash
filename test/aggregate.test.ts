@@ -52,3 +52,44 @@ describe('aggregateFindings', () => {
     expect(findings[0]!.reproSteps.length).toBe(3);
   });
 });
+
+describe('http status dedup', () => {
+  it('keeps a 401 and a 404 on the same route as distinct findings', () => {
+    const signals: Signal[] = [
+      sig({ kind: 'http.4xx', detail: '401 http://x.test/api/a', meta: { status: 401 } }),
+      sig({ kind: 'http.4xx', detail: '404 http://x.test/api/a', meta: { status: 404 } }),
+    ];
+    const findings = aggregateFindings({ signals, actions: [], screenshots: new Map() });
+    expect(findings).toHaveLength(2);
+  });
+});
+
+describe('resource-scoped network dedup', () => {
+  it('merges the same failing resource seen from different pages', () => {
+    const signals: Signal[] = [
+      sig({
+        kind: 'http.4xx',
+        detail: '404 http://x.test/api/boom',
+        url: 'http://x.test/#/a',
+        meta: { status: 404 },
+      }),
+      sig({
+        kind: 'http.4xx',
+        detail: '404 http://x.test/api/boom',
+        url: 'http://x.test/#/b',
+        meta: { status: 404 },
+      }),
+    ];
+    const findings = aggregateFindings({ signals, actions: [], screenshots: new Map() });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.count).toBe(2);
+  });
+
+  it('keeps the same JS error on different pages distinct', () => {
+    const signals: Signal[] = [
+      sig({ kind: 'pageerror', detail: 'boom', url: 'http://x.test/#/a' }),
+      sig({ kind: 'pageerror', detail: 'boom', url: 'http://x.test/#/b' }),
+    ];
+    expect(aggregateFindings({ signals, actions: [], screenshots: new Map() })).toHaveLength(2);
+  });
+});
